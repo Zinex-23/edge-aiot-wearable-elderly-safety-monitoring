@@ -1,0 +1,22 @@
+{
+  "model_npz": "/home/dsoft1/CAPSTONE/Code/train_model_wrist_Fall_detection_Comprehensive/artifacts/model_weights.npz",
+  "header_path": "/home/dsoft1/CAPSTONE/Code/train_model_wrist_Fall_detection_Comprehensive/artifacts_esp32/fall_model_esp32.h",
+  "compact_npz": "/home/dsoft1/CAPSTONE/Code/train_model_wrist_Fall_detection_Comprehensive/artifacts_esp32/model_compact_selected.npz",
+  "full_feature_dim": 80,
+  "selected_feature_dim": 64,
+  "quantize_int8": true,
+  "esp_parameter_bytes": 716,
+  "esp_parameter_kb": 0.6992,
+  "breakdown_bytes": {
+    "feature_index_u16": 128,
+    "mean_f32": 256,
+    "std_f32": 256,
+    "weights": 64,
+    "bias_threshold": 8,
+    "weight_scale": 4
+  },
+  "file_sizes": {
+    "header_bytes": 3247,
+    "compact_npz_bytes": 2400
+  }
+}

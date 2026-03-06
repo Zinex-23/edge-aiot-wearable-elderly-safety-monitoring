@@ -3,5 +3,5 @@ __pycache__/
 *.pyc
 
 # Generated large artifacts
-train_model_FallDetection/archive/total_data/all_csv_combined_union.csv
-train_model_FallDetection/archive/total_data/normalized/normalized_all.csv
+/AI/train_model_FallDetection/archive/total_data/all_csv_combined_union.csv
+/AI/train_model_FallDetection/archive/total_data/normalized/normalized_all.csv
