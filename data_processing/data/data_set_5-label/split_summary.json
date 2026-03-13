@@ -1,0 +1,38 @@
+{
+  "test": {
+    "rows": 2839,
+    "subjects": 5,
+    "trials": 248,
+    "labels": {
+      "crouching": 264,
+      "fall": 951,
+      "hand": 423,
+      "sit": 283,
+      "walk": 918
+    }
+  },
+  "train": {
+    "rows": 5299,
+    "subjects": 15,
+    "trials": 520,
+    "labels": {
+      "crouching": 367,
+      "fall": 1374,
+      "hand": 956,
+      "sit": 553,
+      "walk": 2049
+    }
+  },
+  "validation": {
+    "rows": 1843,
+    "subjects": 5,
+    "trials": 201,
+    "labels": {
+      "crouching": 141,
+      "fall": 555,
+      "hand": 336,
+      "sit": 209,
+      "walk": 602
+    }
+  }
+}

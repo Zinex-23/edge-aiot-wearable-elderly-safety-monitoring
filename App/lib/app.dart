@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import 'providers/health_provider.dart';
+import 'app_entry.dart';
+import 'providers/auth_provider.dart';
 import 'providers/theme_provider.dart';
-import 'screens/main_shell.dart';
-import 'services/health_monitor_service.dart';
 import 'theme/app_colors.dart';
 import 'theme/app_theme.dart';
 
@@ -16,8 +15,7 @@ class ElderlyHealthMonitorApp extends StatelessWidget {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider(
-          create: (_) =>
-              HealthProvider(service: HealthMonitorService())..loadDashboard(),
+          create: (_) => AuthProvider()..initialize(),
         ),
         ChangeNotifierProvider(create: (_) => ThemeProvider()),
       ],
@@ -31,7 +29,7 @@ class ElderlyHealthMonitorApp extends StatelessWidget {
             theme: AppTheme.lightTheme,
             darkTheme: AppTheme.darkTheme,
             themeMode: themeProvider.themeMode,
-            home: const MainShell(),
+            home: const AppEntry(),
           );
         },
       ),

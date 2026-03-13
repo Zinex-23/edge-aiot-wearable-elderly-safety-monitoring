@@ -1,0 +1,31 @@
+{
+  "label_name_to_id": {
+    "fall": 0,
+    "walking": 1,
+    "sitting": 2,
+    "hand_motion": 3,
+    "bending": 4,
+    "near_fall": 5
+  },
+  "activity_to_label": {
+    "F01": "fall",
+    "F02": "fall",
+    "F03": "fall",
+    "F04": "fall",
+    "F05": "fall",
+    "F06": "fall",
+    "F07": "fall",
+    "F08": "fall",
+    "D01": "walking",
+    "D02": "walking",
+    "D03": "walking",
+    "D04": "sitting",
+    "D09": "hand_motion",
+    "D10": "hand_motion",
+    "D11": "hand_motion",
+    "D06": "bending",
+    "D05": "near_fall",
+    "D07": "near_fall",
+    "D08": "near_fall"
+  }
+}

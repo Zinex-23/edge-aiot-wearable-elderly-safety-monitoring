@@ -3,13 +3,15 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../models/dashboard_snapshot.dart';
+import '../models/editable_device_info.dart';
+import '../providers/auth_provider.dart';
+import '../providers/health_provider.dart';
 import '../providers/theme_provider.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../theme/app_text_styles.dart';
 import '../theme/status_palette.dart';
 import '../widgets/app_background.dart';
-import '../widgets/detail_stat_tile.dart';
 import '../widgets/premium_card.dart';
 import '../widgets/screen_header.dart';
 import '../widgets/status_chip.dart';
@@ -29,6 +31,14 @@ class ProfileScreen extends StatelessWidget {
     final statusColor = StatusPalette.colorForHealthStatus(
       snapshot.profile.status,
     );
+    final deviceInfo =
+        context.watch<HealthProvider>().editableDeviceInfo ??
+        EditableDeviceInfo(
+          heightCm: snapshot.profile.heightCm,
+          weightKg: snapshot.profile.weightKg,
+          address: snapshot.locationLabel,
+          phoneNumber: '+84 900 123 456',
+        );
 
     return AppBackground(
       child: SafeArea(
@@ -98,53 +108,50 @@ class ProfileScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: AppSpacing.xxl),
-            Text('Personal details', style: AppTextStyles.title),
-            const SizedBox(height: AppSpacing.md),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final tileWidth = (constraints.maxWidth - AppSpacing.md) / 2;
-
-                return Wrap(
-                  spacing: AppSpacing.md,
-                  runSpacing: AppSpacing.md,
-                  children: [
-                    SizedBox(
-                      width: tileWidth,
-                      child: DetailStatTile(
-                        label: 'Height',
-                        value: '${snapshot.profile.heightCm} cm',
+            PremiumCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text('Device Information', style: AppTextStyles.title),
+                      const Spacer(),
+                      FilledButton.tonalIcon(
+                        onPressed: () {
+                          showDialog<void>(
+                            context: context,
+                            builder: (_) =>
+                                _EditDeviceInfoDialog(initialInfo: deviceInfo),
+                          );
+                        },
+                        icon: const Icon(Icons.edit_rounded),
+                        label: const Text('Edit'),
                       ),
-                    ),
-                    SizedBox(
-                      width: tileWidth,
-                      child: DetailStatTile(
-                        label: 'Weight',
-                        value: '${snapshot.profile.weightKg} kg',
-                      ),
-                    ),
-                    SizedBox(
-                      width: tileWidth,
-                      child: DetailStatTile(
-                        label: 'Location',
-                        value: 'District 7',
-                        footnote: 'Ho Chi Minh City',
-                      ),
-                    ),
-                    SizedBox(
-                      width: tileWidth,
-                      child: DetailStatTile(
-                        label: 'Last Sync',
-                        value: DateFormat(
-                          'h:mm a',
-                        ).format(snapshot.profile.lastSync),
-                        footnote: DateFormat(
-                          'MMM d',
-                        ).format(snapshot.profile.lastSync),
-                      ),
-                    ),
-                  ],
-                );
-              },
+                    ],
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+                  _DeviceRow(
+                    label: 'Height',
+                    value: '${deviceInfo.heightCm} cm',
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+                  _DeviceRow(
+                    label: 'Weight',
+                    value: '${deviceInfo.weightKg} kg',
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+                  _DeviceRow(label: 'Address', value: deviceInfo.address),
+                  const SizedBox(height: AppSpacing.md),
+                  _DeviceRow(label: 'Phone', value: deviceInfo.phoneNumber),
+                  const SizedBox(height: AppSpacing.md),
+                  _DeviceRow(
+                    label: 'Last Sync',
+                    value: DateFormat(
+                      'MMM d, h:mm a',
+                    ).format(snapshot.profile.lastSync),
+                  ),
+                ],
+              ),
             ),
             const SizedBox(height: AppSpacing.xxl),
             PremiumCard(
@@ -266,6 +273,29 @@ class ProfileScreen extends StatelessWidget {
                 );
               },
             ),
+            const SizedBox(height: AppSpacing.xxl),
+            PremiumCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Session', style: AppTextStyles.title),
+                  const SizedBox(height: AppSpacing.sm),
+                  Text(
+                    'Sign out to return to the login screen.',
+                    style: AppTextStyles.body,
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.tonalIcon(
+                      onPressed: () => context.read<AuthProvider>().logout(),
+                      icon: const Icon(Icons.logout_rounded),
+                      label: const Text('Logout'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -283,6 +313,7 @@ class _DeviceRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Expanded(
           child: Text(
@@ -290,13 +321,164 @@ class _DeviceRow extends StatelessWidget {
             style: AppTextStyles.body.copyWith(color: AppColors.textMuted),
           ),
         ),
-        Text(
-          value,
-          style: AppTextStyles.bodyStrong.copyWith(
-            color: color ?? AppColors.textPrimary,
+        const SizedBox(width: AppSpacing.md),
+        Expanded(
+          flex: 2,
+          child: Text(
+            value,
+            textAlign: TextAlign.right,
+            style: AppTextStyles.bodyStrong.copyWith(
+              color: color ?? AppColors.textPrimary,
+            ),
           ),
         ),
       ],
     );
+  }
+}
+
+class _EditDeviceInfoDialog extends StatefulWidget {
+  const _EditDeviceInfoDialog({required this.initialInfo});
+
+  final EditableDeviceInfo initialInfo;
+
+  @override
+  State<_EditDeviceInfoDialog> createState() => _EditDeviceInfoDialogState();
+}
+
+class _EditDeviceInfoDialogState extends State<_EditDeviceInfoDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _heightController;
+  late final TextEditingController _weightController;
+  late final TextEditingController _addressController;
+  late final TextEditingController _phoneController;
+
+  @override
+  void initState() {
+    super.initState();
+    _heightController = TextEditingController(
+      text: widget.initialInfo.heightCm.toString(),
+    );
+    _weightController = TextEditingController(
+      text: widget.initialInfo.weightKg.toString(),
+    );
+    _addressController = TextEditingController(text: widget.initialInfo.address);
+    _phoneController = TextEditingController(
+      text: widget.initialInfo.phoneNumber,
+    );
+  }
+
+  @override
+  void dispose() {
+    _heightController.dispose();
+    _weightController.dispose();
+    _addressController.dispose();
+    _phoneController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Edit Device Information'),
+      content: Form(
+        key: _formKey,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                controller: _heightController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Height (cm)',
+                  hintText: 'e.g. 158',
+                ),
+                validator: (value) {
+                  final parsed = int.tryParse(value?.trim() ?? '');
+                  if (parsed == null || parsed <= 0) {
+                    return 'Enter a valid height';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: AppSpacing.md),
+              TextFormField(
+                controller: _weightController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Weight (kg)',
+                  hintText: 'e.g. 54',
+                ),
+                validator: (value) {
+                  final parsed = int.tryParse(value?.trim() ?? '');
+                  if (parsed == null || parsed <= 0) {
+                    return 'Enter a valid weight';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: AppSpacing.md),
+              TextFormField(
+                controller: _addressController,
+                decoration: const InputDecoration(
+                  labelText: 'Address',
+                  hintText: 'e.g. 23 Nguyen Huu Tho, District 7',
+                ),
+                validator: (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return 'Address is required';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: AppSpacing.md),
+              TextFormField(
+                controller: _phoneController,
+                keyboardType: TextInputType.phone,
+                decoration: const InputDecoration(
+                  labelText: 'Phone number',
+                  hintText: 'e.g. +84 900 123 456',
+                ),
+                validator: (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return 'Phone number is required';
+                  }
+                  return null;
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _save,
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+
+  void _save() {
+    if (!(_formKey.currentState?.validate() ?? false)) {
+      return;
+    }
+
+    final height = int.parse(_heightController.text.trim());
+    final weight = int.parse(_weightController.text.trim());
+
+    context.read<HealthProvider>().updateDeviceInfo(
+      heightCm: height,
+      weightKg: weight,
+      address: _addressController.text,
+      phoneNumber: _phoneController.text,
+    );
+
+    Navigator.of(context).pop();
   }
 }
