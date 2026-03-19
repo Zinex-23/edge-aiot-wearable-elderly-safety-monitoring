@@ -1,0 +1,23 @@
+{
+  "test": {
+    "rows": 2839,
+    "fall_rows": 951,
+    "non_fall_rows": 1888,
+    "subjects": 5,
+    "trials": 248
+  },
+  "train": {
+    "rows": 5299,
+    "fall_rows": 1374,
+    "non_fall_rows": 3925,
+    "subjects": 15,
+    "trials": 520
+  },
+  "validation": {
+    "rows": 1843,
+    "fall_rows": 555,
+    "non_fall_rows": 1288,
+    "subjects": 5,
+    "trials": 201
+  }
+}
