@@ -1,0 +1,25 @@
+Balanced HR_IMU V2 Summary
+
+Fall windows before balancing: 1628
+Non-fall windows before balancing: 5468
+Fall windows after balancing: 1628
+Non-fall windows after balancing: 1628
+Final ratio fall:non-fall = 1628:1628
+Total windows used for training pipeline: 3256
+
+Train fall/non-fall: 1140/1139
+Validation fall/non-fall: 244/244
+Test fall/non-fall: 244/245
+
+Accuracy: 0.9080
+Precision: 0.8541
+Recall: 0.9836
+F1-score: 0.9143
+False alarm rate: 0.1673
+Miss rate: 0.0164
+Confusion matrix: [[204, 41], [4, 240]]
+ROC AUC: 0.9712
+PR AUC: 0.9669
+TFLite size KB: 10.71
+TFLite input shape: [1, 100, 6]
+TFLite output shape: [1, 1]

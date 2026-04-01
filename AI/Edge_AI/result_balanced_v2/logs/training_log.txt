@@ -1,0 +1,5 @@
+before_fall_windows=1628
+before_non_fall_windows=5468
+after_fall_windows=1628
+after_non_fall_windows=1628
+selected_threshold=0.40
