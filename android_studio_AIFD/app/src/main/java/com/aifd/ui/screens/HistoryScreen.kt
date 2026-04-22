@@ -88,7 +88,7 @@ fun HistoryScreen(
                     Spacer(Modifier.height(16.dp))
                     Text(strings.noEventsFound, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
                     Text(
-                        if (filter == "all") strings.eventHistoryEmpty
+                        if (filter == "all") strings.alertHistoryEmpty
                         else strings.noFilteredEvents(filter),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant

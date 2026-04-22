@@ -52,7 +52,7 @@ import com.aifd.viewmodel.*
 sealed class Screen(val route: String) {
     data object Home : Screen("home")
     data object Monitoring : Screen("monitoring")
-    data object History : Screen("history")
+    data object Alerts : Screen("alerts")
     data object Settings : Screen("settings")
     data object FallAlert : Screen("fall_alert")
     data object DevicePairing : Screen("device_pairing")
@@ -147,7 +147,7 @@ fun AppNavigation(
         listOf(
             BottomNavItem(Screen.Home, { strings.home }, Icons.Filled.Home, Icons.Outlined.Home),
             BottomNavItem(Screen.Monitoring, { strings.health }, Icons.Filled.Favorite, Icons.Outlined.FavoriteBorder),
-            BottomNavItem(Screen.History, { strings.history }, Icons.Filled.History, Icons.Outlined.History),
+            BottomNavItem(Screen.Alerts, { strings.alerts }, Icons.Filled.Notifications, Icons.Outlined.Notifications),
             BottomNavItem(Screen.Settings, { strings.settings }, Icons.Filled.Settings, Icons.Outlined.Settings)
         )
     }
@@ -239,7 +239,7 @@ fun AppNavigation(
                 )
             }
 
-            composable(Screen.History.route) {
+            composable(Screen.Alerts.route) {
                 val alertState by alertViewModel.uiState.collectAsState()
                 HistoryScreen(
                     events = alertState.fallEvents,
