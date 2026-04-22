@@ -53,11 +53,11 @@ static const uint32_t SAMPLE_PERIOD_MS = 1000 / SAMPLE_RATE_HZ;
 
 static const int kWindowSize = 100;
 static const int kFeatureCount = 6;
-static const int kInferenceStride = 100;
+static const int kInferenceStride = 50;
 static const int kTensorArenaSize = 60 * 1024;
 
 static const float FALL_DECISION_THRESHOLD = 0.40f;
-static const float CANDIDATE_ACC_THRESHOLD = 1.8f;
+static const float CANDIDATE_ACC_THRESHOLD = 1.5f;
 static const float CANDIDATE_GYRO_THRESHOLD = 50.0f;
 
 // =====================================================
@@ -75,7 +75,7 @@ static const uint32_t SIMULATED_UNIX_EPOCH_BASE_UTC = 1776729600UL;  // 2026-04-
 // =====================================================
 // BUTTON STATE
 // =====================================================
-bool acquisitionEnabled = false;
+bool acquisitionEnabled = true;
 bool buttonState = HIGH;
 bool lastButtonReading = HIGH;
 unsigned long lastDebounceTime = 0;
@@ -226,33 +226,51 @@ class ControlCharacteristicCallbacks : public NimBLECharacteristicCallbacks {
 // =====================================================
 // UTILS
 // =====================================================
-int16_t toInt16(uint8_t lsb, uint8_t msb) {
-  return (int16_t)((msb << 8) | lsb);
-}
+// FreeRTOS Task Handles
+TaskHandle_t samplingTaskHandle = NULL;
+TaskHandle_t inferenceTaskHandle = NULL;
 
+// Mutex for IMU data access
+portMUX_TYPE imuMux = vPortMUX_INITIALIZER_UNLOCKED;
+
+// =====================================================
+// BMI160 I2C HELPERS (with retries)
+// =====================================================
 bool writeReg(uint8_t reg, uint8_t value) {
-  Wire.beginTransmission(bmi160Addr);
-  Wire.write(reg);
-  Wire.write(value);
-  return Wire.endTransmission() == 0;
+  for (int i = 0; i < 3; i++) {
+    Wire.beginTransmission(bmi160Addr);
+    Wire.write(reg);
+    Wire.write(value);
+    if (Wire.endTransmission() == 0) return true;
+    delay(1);
+  }
+  return false;
 }
 
 bool readRegs(uint8_t reg, uint8_t *buffer, size_t len) {
-  Wire.beginTransmission(bmi160Addr);
-  Wire.write(reg);
-  if (Wire.endTransmission(false) != 0) return false;
-
-  size_t got = Wire.requestFrom((int)bmi160Addr, (int)len, (int)true);
-  if (got != len) return false;
-
-  for (size_t i = 0; i < len; ++i) {
-    buffer[i] = Wire.read();
+  for (int i = 0; i < 3; i++) {
+    Wire.beginTransmission(bmi160Addr);
+    Wire.write(reg);
+    if (Wire.endTransmission(false) != 0) {
+      delay(1);
+      continue;
+    }
+    if (Wire.requestFrom((int)bmi160Addr, (int)len) != (int)len) {
+      delay(1);
+      continue;
+    }
+    for (size_t j = 0; j < len; j++) buffer[j] = Wire.read();
+    return true;
   }
-  return true;
+  return false;
 }
 
 bool readReg(uint8_t reg, uint8_t &value) {
   return readRegs(reg, &value, 1);
+}
+
+int16_t toInt16(uint8_t lsb, uint8_t msb) {
+  return (int16_t)((msb << 8) | lsb);
 }
 
 bool probeAddress(uint8_t addr) {
@@ -260,14 +278,40 @@ bool probeAddress(uint8_t addr) {
   return Wire.endTransmission() == 0;
 }
 
+void scanI2C() {
+  Serial.println("Scanning I2C bus...");
+  byte count = 0;
+  for (byte i = 1; i < 127; i++) {
+    Wire.beginTransmission(i);
+    if (Wire.endTransmission() == 0) {
+      Serial.printf("I2C device found at address 0x%02X\n", i);
+      count++;
+    }
+  }
+  if (count == 0) Serial.println("No I2C devices found");
+  else Serial.printf("Total %d device(s) found\n", count);
+}
+
 bool detectBMI160() {
   uint8_t chipId = 0;
 
+  Serial.println("Detecting BMI160...");
+  
   bmi160Addr = BMI160_ADDR_LOW;
-  if (readReg(REG_CHIP_ID, chipId) && chipId == BMI160_CHIP_ID) return true;
+  if (readReg(REG_CHIP_ID, chipId)) {
+    Serial.printf("  Address 0x68: Got ID 0x%02X (Expected 0xD1)\n", chipId);
+    if (chipId == BMI160_CHIP_ID) return true;
+  } else {
+    Serial.println("  Address 0x68: No response");
+  }
 
   bmi160Addr = BMI160_ADDR_HIGH;
-  if (readReg(REG_CHIP_ID, chipId) && chipId == BMI160_CHIP_ID) return true;
+  if (readReg(REG_CHIP_ID, chipId)) {
+    Serial.printf("  Address 0x69: Got ID 0x%02X (Expected 0xD1)\n", chipId);
+    if (chipId == BMI160_CHIP_ID) return true;
+  } else {
+    Serial.println("  Address 0x69: No response");
+  }
 
   return false;
 }
@@ -525,6 +569,9 @@ bool initModel() {
   }
 
   Serial.println("TFLite Micro ready");
+  Serial.printf("Input: scale=%.6f, zero_point=%d\n", inputTensor->params.scale, inputTensor->params.zero_point);
+  Serial.printf("Output: scale=%.6f, zero_point=%d, elements=%d\n", 
+                outputTensor->params.scale, outputTensor->params.zero_point, outputElementCount);
   return true;
 }
 
@@ -544,10 +591,13 @@ bool runInference(float &fallProb,
   tsEnd = last.tsMs;
 
   if (!candidate) {
+    Serial.printf("Non-candidate window: maxAcc=%.2f, maxGyro=%.2f\n", maxAccMag, maxGyroMag);
     fallProb = 0.0f;
     nonFallProb = 1.0f;
     return true;
   }
+
+  Serial.printf("CANDIDATE window: maxAcc=%.2f, maxGyro=%.2f -> running inference\n", maxAccMag, maxGyroMag);
 
   for (int t = 0; t < kWindowSize; ++t) {
     ImuSample s = orderedSampleAt(t);
@@ -565,13 +615,18 @@ bool runInference(float &fallProb,
   }
 
   if (outputElementCount == 1) {
-    fallProb = dequantizeOutput(outputTensor->data.int8[0]);
+    int8_t rawValue = outputTensor->data.int8[0];
+    fallProb = dequantizeOutput(rawValue);
+    Serial.printf("Inference (1 output): raw=%d, prob=%.3f\n", rawValue, fallProb);
     if (fallProb < 0.0f) fallProb = 0.0f;
     if (fallProb > 1.0f) fallProb = 1.0f;
     nonFallProb = 1.0f - fallProb;
   } else {
-    nonFallProb = dequantizeOutput(outputTensor->data.int8[0]);
-    fallProb = dequantizeOutput(outputTensor->data.int8[1]);
+    int8_t rawNonFall = outputTensor->data.int8[0];
+    int8_t rawFall = outputTensor->data.int8[1];
+    nonFallProb = dequantizeOutput(rawNonFall);
+    fallProb = dequantizeOutput(rawFall);
+    Serial.printf("Inference (2 outputs): rawNF=%d, rawF=%d -> fallProb=%.3f\n", rawNonFall, rawFall, fallProb);
   }
   return true;
 }
@@ -579,7 +634,9 @@ bool runInference(float &fallProb,
 void handleButton() {
   bool reading = digitalRead(BUTTON_PIN);
 
+  // Debug: every change in reading
   if (reading != lastButtonReading) {
+    Serial.printf("Raw Button Logic: reading=%d, lastReading=%d, currentState=%d\n", reading, lastButtonReading, buttonState);
     lastDebounceTime = millis();
   }
 
@@ -589,7 +646,8 @@ void handleButton() {
 
       if (buttonState == LOW) {
         acquisitionEnabled = !acquisitionEnabled;
-        digitalWrite(LED_PIN, acquisitionEnabled ? HIGH : LOW);
+        // Commented out LED control as pin 48 is often RGB on S3
+        // digitalWrite(LED_PIN, acquisitionEnabled ? HIGH : LOW);
         resetWindow();
         resetVitalsState();
         lastSampleMs = millis();
@@ -766,6 +824,62 @@ void initBle() {
   Serial.printf("Device name: %s\n", BLE_DEVICE_NAME);
 }
 
+void samplingTask(void *pvParameters) {
+  TickType_t xLastWakeTime = xTaskGetTickCount();
+  const TickType_t xFrequency = pdMS_TO_TICKS(SAMPLE_PERIOD_MS);
+  ImuSample sample;
+
+  Serial.println("Sampling task STARTED");
+  for (;;) {
+    vTaskDelayUntil(&xLastWakeTime, xFrequency);
+
+    if (!acquisitionEnabled || !bmiOk) continue;
+
+    if (readImuSample(sample)) {
+      portENTER_CRITICAL(&imuMux);
+      pushSample(sample);
+      portEXIT_CRITICAL(&imuMux);
+      
+      maybeSampleVitals();
+      maybeDispatchVitalsBatch();
+
+      if (samplesSinceInference >= kInferenceStride && windowCount >= kWindowSize) {
+        if (inferenceTaskHandle != NULL) {
+          xTaskNotifyGive(inferenceTaskHandle);
+        }
+      }
+    }
+  }
+}
+
+void inferenceTask(void *pvParameters) {
+  Serial.println("Inference task STARTED");
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+    if (!acquisitionEnabled) continue;
+
+    float fallProb = 0.0f, nonFallProb = 0.0f;
+    uint32_t tsStart = 0, tsEnd = 0;
+    
+    if (runInference(fallProb, nonFallProb, tsStart, tsEnd)) {
+      portENTER_CRITICAL(&imuMux);
+      samplesSinceInference = 0;
+      portEXIT_CRITICAL(&imuMux);
+
+      if (fallProb >= FALL_DECISION_THRESHOLD) {
+        FallAlertPacket packet;
+        packet.sequence = nextFallSequence++;
+        packet.timestampSec = currentUnixTimeSecUtc();
+        packet.statusCode = 1;
+        packet.fallProb = fallProb;
+        packet.nonFallProb = nonFallProb;
+        queueOrSendFallAlert(packet);
+      }
+    }
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   delay(1000);
@@ -781,13 +895,16 @@ void setup() {
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN, 100000);
   Wire.setClock(100000);
   Wire.setTimeOut(20);
-  delay(50);
+  delay(100);
 
-  Serial.printf("Probe BMI160 0x68: %s\n", probeAddress(0x68) ? "OK" : "FAIL");
-  Serial.printf("Probe BMI160 0x69: %s\n", probeAddress(0x69) ? "OK" : "FAIL");
+  scanI2C();
 
   bmiOk = initBMI160();
-  Serial.println(bmiOk ? "BMI160 OK" : "BMI160 NOT FOUND");
+  if (bmiOk) {
+    Serial.println("BMI160 initialization SUCCESS");
+  } else {
+    Serial.println("BMI160 initialization FAILED - check wiring and power");
+  }
 
   initBle();
 
@@ -798,10 +915,11 @@ void setup() {
 
   resetVitalsState();
 
-  Serial.println("Nhan button de bat/tat thu thap va suy luan.");
-  Serial.println("BLE status notify: chi gui khi co fall.");
-  Serial.println("BLE vitals notify: lay mau moi 5s va gui 1 batch 5 diem moi 25s.");
-  Serial.println("BLE backlog chi flush sau khi client subscribe xong va gui lenh READY.");
+  // Create tasks
+  xTaskCreatePinnedToCore(samplingTask, "sampling", 4096, NULL, 10, &samplingTaskHandle, 1);
+  xTaskCreatePinnedToCore(inferenceTask, "inference", 8192, NULL, 5, &inferenceTaskHandle, 0);
+
+  Serial.println("System fully initialized");
 }
 
 void loop() {
@@ -811,67 +929,5 @@ void loop() {
     flushBleBacklog();
   }
 
-  if (!acquisitionEnabled) {
-    delay(10);
-    return;
-  }
-
-  maybeSampleVitals();
-  maybeDispatchVitalsBatch();
-
-  uint32_t now = millis();
-  if ((uint32_t)(now - lastSampleMs) < SAMPLE_PERIOD_MS) {
-    delay(1);
-    return;
-  }
-
-  lastSampleMs += SAMPLE_PERIOD_MS;
-
-  ImuSample sample;
-  if (!readImuSample(sample)) {
-    Serial.println("IMU read failed");
-    delay(5);
-    return;
-  }
-
-  pushSample(sample);
-
-  if (windowCount < kWindowSize || samplesSinceInference < kInferenceStride) {
-    return;
-  }
-
-  float fallProb = 0.0f;
-  float nonFallProb = 0.0f;
-  uint32_t tsStart = 0;
-  uint32_t tsEnd = 0;
-
-  bool ok = runInference(fallProb, nonFallProb, tsStart, tsEnd);
-  samplesSinceInference = 0;
-
-  if (!ok) {
-    Serial.println("inference_error");
-    return;
-  }
-
-  const bool isFall = fallProb >= FALL_DECISION_THRESHOLD;
-  Serial.print("ts_start=");
-  Serial.print(tsStart);
-  Serial.print(" ts_end=");
-  Serial.print(tsEnd);
-  Serial.print(" fall_prob=");
-  Serial.print(fallProb, 3);
-  Serial.print(" non_fall_prob=");
-  Serial.print(nonFallProb, 3);
-  Serial.print(" prediction=");
-  Serial.println(isFall ? "fall" : "non-fall");
-
-  if (!isFall) return;
-
-  FallAlertPacket packet;
-  packet.sequence = nextFallSequence++;
-  packet.timestampSec = currentUnixTimeSecUtc();
-  packet.statusCode = 1;
-  packet.fallProb = fallProb;
-  packet.nonFallProb = nonFallProb;
-  queueOrSendFallAlert(packet);
+  vTaskDelay(pdMS_TO_TICKS(10));
 }
