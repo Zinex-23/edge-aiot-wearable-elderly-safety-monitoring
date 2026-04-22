@@ -1,0 +1,72 @@
+package com.aifd.ui.theme
+
+import androidx.compose.ui.graphics.Color
+
+// ─── Primary Blue ────────────────────────────────────────────────
+val Blue10 = Color(0xFF001F3F)
+val Blue20 = Color(0xFF003566)
+val Blue30 = Color(0xFF004A8F)
+val Blue40 = Color(0xFF0061B9)
+val Blue50 = Color(0xFF1A7AE5)
+val Blue60 = Color(0xFF4A9AFF)
+val Blue70 = Color(0xFF7AB5FF)
+val Blue80 = Color(0xFFADD0FF)
+val Blue90 = Color(0xFFD6E8FF)
+val Blue95 = Color(0xFFEBF3FF)
+
+// ─── Safe / Success Green ────────────────────────────────────────
+val Green10 = Color(0xFF002110)
+val Green20 = Color(0xFF00391C)
+val Green30 = Color(0xFF00522B)
+val Green40 = Color(0xFF006D3B)
+val Green50 = Color(0xFF008A4D)
+val Green60 = Color(0xFF18A85E)
+val Green70 = Color(0xFF4DC47E)
+val Green80 = Color(0xFF7FE09E)
+val Green90 = Color(0xFFB3F0C4)
+val Green95 = Color(0xFFDAF8E2)
+
+// ─── Alert / Error Red ───────────────────────────────────────────
+val Red10 = Color(0xFF410002)
+val Red20 = Color(0xFF690005)
+val Red30 = Color(0xFF93000A)
+val Red40 = Color(0xFFBA1A1A)
+val Red50 = Color(0xFFDE3730)
+val Red60 = Color(0xFFFF5449)
+val Red70 = Color(0xFFFF897D)
+val Red80 = Color(0xFFFFB4AB)
+val Red90 = Color(0xFFFFDAD6)
+val Red95 = Color(0xFFFFEDEB)
+
+// ─── Warning Orange / Amber ──────────────────────────────────────
+val Amber20 = Color(0xFF4A2800)
+val Amber30 = Color(0xFF6B3B00)
+val Amber40 = Color(0xFF8E5000)
+val Amber60 = Color(0xFFFFA726)
+val Amber80 = Color(0xFFFFCC80)
+val Amber90 = Color(0xFFFFE0B2)
+
+// ─── Neutral tones ──────────────────────────────────────────────
+val Neutral0 = Color(0xFF000000)
+val Neutral4 = Color(0xFF0D0E11)
+val Neutral6 = Color(0xFF131316)
+val Neutral10 = Color(0xFF1B1B1F)
+val Neutral17 = Color(0xFF2B2B30)
+val Neutral20 = Color(0xFF303034)
+val Neutral22 = Color(0xFF36363A)
+val Neutral24 = Color(0xFF3B3B3F)
+val Neutral30 = Color(0xFF474750)
+val Neutral40 = Color(0xFF5F5F68)
+val Neutral50 = Color(0xFF787880)
+val Neutral60 = Color(0xFF91919A)
+val Neutral70 = Color(0xFFACADB5)
+val Neutral80 = Color(0xFFC7C7D0)
+val Neutral87 = Color(0xFFDADAE2)
+val Neutral90 = Color(0xFFE3E3EB)
+val Neutral92 = Color(0xFFE9E9F0)
+val Neutral94 = Color(0xFFEEEEF5)
+val Neutral95 = Color(0xFFF1F1F8)
+val Neutral96 = Color(0xFFF4F4FA)
+val Neutral98 = Color(0xFFFAF9FF)
+val Neutral99 = Color(0xFFFDFBFF)
+val Neutral100 = Color(0xFFFFFFFF)
