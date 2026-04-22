@@ -235,30 +235,6 @@ private fun HomeScreenContent(
             onClick = onNavigateToMonitoring
         )
 
-        val stepProgress = healthData?.let {
-            (it.stepCount.toFloat() / it.stepGoal).coerceIn(0f, 1f)
-        } ?: 0f
-        StatCard(
-            icon = Icons.Default.DirectionsWalk,
-            iconTint = AIFDThemeExt.colors.safe,
-            iconBackground = AIFDThemeExt.colors.safeContainer,
-            label = strings.stepsToday,
-            value = healthData?.stepCount?.let { "%,d".format(it) } ?: "--",
-            unit = "/ ${healthData?.stepGoal?.let { "%,d".format(it) } ?: "10,000"}",
-            onClick = onNavigateToMonitoring,
-            bottomContent = {
-                Spacer(modifier = Modifier.height(8.dp))
-                LinearProgressIndicator(
-                    progress = stepProgress,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(6.dp)
-                        .clip(RoundedCornerShape(3.dp)),
-                    color = AIFDThemeExt.colors.safe,
-                    trackColor = MaterialTheme.colorScheme.surfaceVariant
-                )
-            }
-        )
 
 
         if (isWearer && !isConnected) {

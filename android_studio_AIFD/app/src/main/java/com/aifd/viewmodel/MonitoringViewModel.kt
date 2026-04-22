@@ -18,7 +18,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-enum class MetricTab { HEART_RATE, SPO2, STEPS }
+enum class MetricTab { HEART_RATE, SPO2 }
 enum class TimeRange { LIVE, ONE_HOUR, TWENTY_FOUR_HOURS }
 
 data class MonitoringUiState(
@@ -136,7 +136,6 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
         val data = when (state.activeTab) {
             MetricTab.HEART_RATE -> MockDataProvider.generateChartData(72.0, 3.0, 55.0, 110.0, points)
             MetricTab.SPO2 -> MockDataProvider.generateChartData(97.0, 1.0, 92.0, 100.0, points)
-            MetricTab.STEPS -> emptyList()
         }
         _uiState.update { it.copy(chartData = data) }
     }

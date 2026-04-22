@@ -107,29 +107,11 @@ private fun MonitoringScreenContent(
                         Text("SpO2", style = MaterialTheme.typography.labelSmall)
                     }
                 }
-                Tab(
-                    selected = uiState.activeTab == MetricTab.STEPS,
-                    onClick = { onTabSelected(MetricTab.STEPS) }
-                ) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Icon(
-                            Icons.Default.DirectionsWalk,
-                            contentDescription = null,
-                            tint = AIFDThemeExt.colors.safe,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Text(strings.stepsToday, style = MaterialTheme.typography.labelSmall)
-                    }
-                }
             }
 
             when (uiState.activeTab) {
                 MetricTab.HEART_RATE -> HeartRateContent(uiState, onTimeRangeSelected, stats)
                 MetricTab.SPO2 -> SpO2Content(uiState, onTimeRangeSelected, stats)
-                MetricTab.STEPS -> StepsContent(uiState)
             }
 
             Spacer(modifier = Modifier.height(80.dp))
@@ -419,103 +401,6 @@ private fun SpO2Content(
     }
 }
 
-@Composable
-private fun StepsContent(uiState: MonitoringUiState) {
-    val strings = AppLocalizations.strings
-    val healthData = uiState.healthData
-    val stepProgress = healthData?.let { (it.stepCount.toFloat() / it.stepGoal).coerceIn(0f, 1f) } ?: 0f
-
-    // Today's steps
-    ElevatedCard(shape = RoundedCornerShape(16.dp)) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(strings.today, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Row(verticalAlignment = Alignment.Bottom) {
-                        Text(
-                            text = healthData?.stepCount?.let { "%,d".format(it) } ?: "--",
-                            style = MaterialTheme.typography.displaySmall,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text("steps", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 4.dp))
-                    }
-                }
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(strings.goal, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(
-                        text = healthData?.stepGoal?.let { "%,d".format(it) } ?: "10,000",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-            }
-            Spacer(Modifier.height(12.dp))
-            LinearProgressIndicator(
-                progress = stepProgress,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(10.dp)
-                    .clip(RoundedCornerShape(5.dp)),
-                color = AIFDThemeExt.colors.safe,
-                trackColor = MaterialTheme.colorScheme.surfaceVariant
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = strings.dailyGoalProgress((stepProgress * 100).toInt()),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-    }
-
-    // Weekly chart
-    ElevatedCard(shape = RoundedCornerShape(16.dp)) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(strings.thisWeek, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(12.dp))
-            StepsBarChart(
-                data = uiState.weeklySteps.map { it.day to it.steps },
-                barColor = AIFDThemeExt.colors.safe
-            )
-            Spacer(Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                uiState.weeklySteps.forEach {
-                    Text(it.day, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-        }
-    }
-
-    // Weekly stats
-    val totalSteps = uiState.weeklySteps.sumOf { it.steps }
-    val avgSteps = totalSteps / uiState.weeklySteps.size.coerceAtLeast(1)
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        ElevatedCard(modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp)) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(strings.weeklyAverage, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("%,d".format(avgSteps), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                Text(strings.stepsPerDay, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-        ElevatedCard(modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp)) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(strings.weeklyTotal, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("%,d".format(totalSteps), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                Text("steps", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-    }
-}
 
 @Preview(showBackground = true, showSystemUi = true)
 @Composable
