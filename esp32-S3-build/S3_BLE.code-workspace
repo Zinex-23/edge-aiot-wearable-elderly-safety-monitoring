@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"path": "../../../../CAPSTONE/AI/edge-aiot-wearable-elderly-safety-monitoring/S3_BLE"
+		},
+		{
+			"name": "esp32-S3-build",
+			"path": "."
+		}
+	],
+	"settings": {}
+}

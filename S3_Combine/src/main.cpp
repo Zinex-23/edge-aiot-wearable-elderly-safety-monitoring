@@ -213,6 +213,21 @@ uint32_t currentUnixTimeSecUtc() {
   return SIMULATED_UNIX_EPOCH_BASE_UTC + (millis() / 1000UL);
 }
 
+void recoverI2C() {
+  Serial.println("[I2C] Attempting manual SCL recovery...");
+  pinMode(I2C_SDA_PIN, INPUT_PULLUP);
+  pinMode(I2C_SCL_PIN, OUTPUT);
+  for (int i = 0; i < 10; i++) {
+    digitalWrite(I2C_SCL_PIN, LOW);
+    delayMicroseconds(5);
+    digitalWrite(I2C_SCL_PIN, HIGH);
+    delayMicroseconds(5);
+  }
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN, 100000);
+}
+
+bool initBMI160();
+
 bool writeReg(uint8_t reg, uint8_t value) {
   for (int i = 0; i < 3; ++i) {
     Wire.beginTransmission(bmi160Addr);
@@ -228,13 +243,22 @@ bool readRegs(uint8_t reg, uint8_t *buffer, size_t len) {
   for (int attempt = 0; attempt < 3; ++attempt) {
     Wire.beginTransmission(bmi160Addr);
     Wire.write(reg);
-    if (Wire.endTransmission(false) != 0) {
-      delay(1);
+    uint8_t err = Wire.endTransmission(false);
+    if (err != 0) {
+      if (attempt == 1) {
+        Serial.printf("[I2C] Error %d. Toggling SCL recovery...\n", err);
+        recoverI2C();
+        writeReg(REG_CMD, 0xB6); // Soft reset sensor
+        delay(50);
+        initBMI160();
+      }
+      delay(2);
       continue;
     }
     size_t got = Wire.requestFrom((int)bmi160Addr, (int)len, (int)true);
     if (got != len) {
-      delay(1);
+      if (attempt == 1) recoverI2C();
+      delay(2);
       continue;
     }
     for (size_t j = 0; j < len; ++j) {
@@ -594,7 +618,9 @@ void queueOrSendFallAlert(const FallAlertPacket &packet) {
 
 void appendBleImuBatchNotify(const ImuSample *five) {
   if (!bleClientConnected || !bleClientReady || imuCharacteristic == nullptr) return;
-  String p = "IMU5";
+  String p = "";
+  p.reserve(250);
+  p += "IMU5";
   for (int i = 0; i < 5; ++i) {
     const ImuSample &x = five[i];
     p += "|";
@@ -612,7 +638,7 @@ void appendBleImuBatchNotify(const ImuSample *five) {
     p += ",";
     p += String(x.gz, 2);
   }
-  notifyIfConnected(imuCharacteristic, p, BLE_IMU_NOTIFY_SPACING_MS);
+  notifyIfConnected(imuCharacteristic, p, 5); // Reduced delay, using reserve instead
 }
 
 void feedBleImuStream(const ImuSample &s) {
@@ -769,12 +795,33 @@ void initBle() {
 
 void sampleImuIfDue() {
   uint32_t now = millis();
+  
+  // Periodic hardware recovery check every 5 seconds
+  static uint32_t lastHardwareCheckMs = 0;
+  if (!bmiOk || !max30102Ok) {
+    if (now - lastHardwareCheckMs > 5000) {
+      lastHardwareCheckMs = now;
+      Serial.println("[HW] Attempting to reconnect sensors...");
+      recoverI2C();
+      if (!bmiOk) {
+        bmiOk = initBMI160();
+        Serial.println(bmiOk ? "[HW] BMI160 Reconnected!" : "[HW] BMI160 still missing");
+      }
+      if (!max30102Ok) {
+        max30102Ok = max30102_init();
+        Serial.println(max30102Ok ? "[HW] MAX30102 Reconnected!" : "[HW] MAX30102 still missing");
+      }
+    }
+  }
+
   if ((uint32_t)(now - lastSampleMs) < SAMPLE_PERIOD_MS) return;
   lastSampleMs = now;
 
   ImuSample sample;
   if (!readImuSample(sample)) {
     latestImuValid = false;
+    // If it fails during runtime, mark it as disconnected to trigger recovery later
+    bmiOk = false; 
     return;
   }
 
@@ -854,15 +901,15 @@ void printStatusIfDue() {
       (windowCount >= kWindowSize) ? windowMeanAccelMagG() : 0.0f;
 
   Serial.printf(
-      "BLE=%s ready=%s | ts_ms=%lu | IMU ax=%.3f ay=%.3f az=%.3f | "
-      "HR=%u SpO2=%u | AI=%s fall=%.3f inv=%d | win_mean|a|=%.3f inf=%lu\n",
+      "BLE=%s ready=%s | ts=%lu | ACC %.2f,%.2f,%.2f | GYR %.2f,%.2f,%.2f | "
+      "HR=%u SpO2=%u | AI=%s fall=%.3f | inf=%lu\n",
       bleClientConnected ? "conn" : "adv",
       bleClientReady ? "yes" : "no",
       (unsigned long)now,
       latestImu.ax, latestImu.ay, latestImu.az,
+      latestImu.gx, latestImu.gy, latestImu.gz,
       vitals.heartRate, vitals.spo2,
-      aiStatus, latestFallProb, latestModelInvoked ? 1 : 0,
-      winMeanG, (unsigned long)inferenceCount);
+      aiStatus, latestFallProb, (unsigned long)inferenceCount);
 }
 
 void setup() {
@@ -875,9 +922,8 @@ void setup() {
   Serial.println("\n=== S3_Combine: BMI160 + MAX30102 + TFLite + BLE ===");
   Serial.printf("I2C SDA=%d SCL=%d\n", I2C_SDA_PIN, I2C_SCL_PIN);
 
-  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN, 100000);
-  Wire.setClock(100000);
-  Wire.setTimeOut(20);
+  recoverI2C();
+  Wire.setTimeOut(100);
   delay(100);
 
   scanI2C();

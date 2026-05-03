@@ -7,6 +7,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -51,13 +52,30 @@ fun LineChart(
             val areaPath = Path().apply {
                 moveTo(points.first().x, points.first().y)
                 for (i in 1 until points.size) {
-                    lineTo(points[i].x, points[i].y)
+                    val p1 = points[i - 1]
+                    val p2 = points[i]
+                    val cpX = (p1.x + p2.x) / 2f
+                    cubicTo(
+                        cpX, p1.y,
+                        cpX, p2.y,
+                        p2.x, p2.y
+                    )
                 }
                 lineTo(points.last().x, size.height)
                 lineTo(points.first().x, size.height)
                 close()
             }
-            drawPath(areaPath, color = fillColor)
+            drawPath(
+                path = areaPath,
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        lineColor.copy(alpha = 0.5f),
+                        Color.Transparent
+                    ),
+                    startY = 0f,
+                    endY = size.height
+                )
+            )
         }
 
         // Line
@@ -65,7 +83,14 @@ fun LineChart(
             val linePath = Path().apply {
                 moveTo(points.first().x, points.first().y)
                 for (i in 1 until points.size) {
-                    lineTo(points[i].x, points[i].y)
+                    val p1 = points[i - 1]
+                    val p2 = points[i]
+                    val cpX = (p1.x + p2.x) / 2f
+                    cubicTo(
+                        cpX, p1.y,
+                        cpX, p2.y,
+                        p2.x, p2.y
+                    )
                 }
             }
             drawPath(linePath, color = lineColor, style = Stroke(width = 3f))
