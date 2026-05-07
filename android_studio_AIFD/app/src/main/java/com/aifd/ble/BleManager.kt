@@ -206,8 +206,8 @@ class BleManager(private val context: Context) {
             val bonded = bluetoothAdapter?.bondedDevices ?: emptySet()
             bonded.forEach { device ->
                 val name = try { device.name ?: "Unknown" } catch (_: Exception) { "Unknown" }
-                // Only show devices with S3_ prefix
-                if (name.startsWith("S3_")) {
+                // Show devices with S3_ or ESP32 prefix
+                if (name.startsWith("S3_") || name.startsWith("ESP32")) {
                     discoveredDevices.add(ScannedDevice(name, device.address, -50))
                 }
             }
@@ -263,8 +263,8 @@ class BleManager(private val context: Context) {
                     result.scanRecord?.deviceName ?: "Unknown Device"
                 }
                 
-                // Filter: only show devices starting with S3_
-                if (!name.startsWith("S3_")) return
+                // Filter: show devices starting with S3_ or ESP32
+                if (!name.startsWith("S3_") && !name.startsWith("ESP32")) return
 
                 discoveredDevices.add(ScannedDevice(name, address, result.rssi))
                 _nearbyDevices.value = discoveredDevices.toList()
