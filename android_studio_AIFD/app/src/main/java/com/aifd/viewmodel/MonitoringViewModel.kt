@@ -55,6 +55,12 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
 
     init {
         val ctx = application.applicationContext
+        val prefs = ctx.getSharedPreferences("aifd_prefs", Context.MODE_PRIVATE)
+        if (MockDataProvider.DEMO_MODE) {
+            _uiState.update { it.copy(isConnected = true) }
+            regenerateChartDataFromHistory()
+        }
+
         val intent = Intent(ctx, BleForegroundService::class.java)
         ctx.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
     }

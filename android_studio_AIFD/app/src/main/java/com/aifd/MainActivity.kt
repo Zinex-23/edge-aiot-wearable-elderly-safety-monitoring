@@ -167,9 +167,32 @@ class MainActivity : ComponentActivity() {
                             onLoginSuccess = { name ->
                                 isLoggedIn = true
                                 username = name
-                                if (name == "000") {
-                                    selectedRole = null
+                                if (name == "000" && com.aifd.data.MockDataProvider.DEMO_MODE) {
+                                    // Full setup for demo account (only in DEMO_MODE)
+                                    val demoProfile = UserProfile(
+                                        username = "000",
+                                        caregiverName = "Nguyễn Văn A",
+                                        caregiverPhone = "0702341350",
+                                        wearerName = "Trần Thị B",
+                                        wearerAge = "75",
+                                        wearerGender = "Nữ"
+                                    )
+                                    userProfile = demoProfile
+                                    selectedRole = UserRole.WEARER
+                                    prefs.edit {
+                                        putString("user_role", UserRole.WEARER.name)
+                                        putString("caregiver_name", demoProfile.caregiverName)
+                                        putString("wearer_name", demoProfile.wearerName)
+                                        putString("wearer_age", demoProfile.wearerAge)
+                                        putString("wearer_gender", demoProfile.wearerGender)
+                                        putString("caregiver_phone", demoProfile.caregiverPhone)
+                                        putString("device_name", "ESP32-S3 Wearable")
+                                        putString("device_mac", "AA:BB:CC:DD:EE:FF")
+                                    }
+                                } else if (name == "000") {
+                                    // If 000 logs in but DEMO_MODE is off, clear everything and act like a normal user
                                     userProfile = UserProfile(username = "000")
+                                    selectedRole = null
                                     prefs.edit {
                                         remove("user_role")
                                         remove("caregiver_name")
@@ -181,7 +204,7 @@ class MainActivity : ComponentActivity() {
                                         remove("device_mac")
                                     }
                                 }
-                                prefs.edit {
+                                prefs.edit(commit = true) {
                                     putBoolean("logged_in", true)
                                     putString("username", name)
                                 }

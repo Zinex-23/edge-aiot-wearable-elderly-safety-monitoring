@@ -125,25 +125,6 @@ fun SettingsScreen(
             }
         }
 
-        if (role == UserRole.WEARER) {
-            ElevatedCard {
-                Column(modifier = Modifier.padding(vertical = 4.dp)) {
-                    SectionHeader(strings.device, Modifier.padding(horizontal = 16.dp))
-                    SettingsItem(
-                        icon = Icons.Default.Bluetooth,
-                        label = strings.connectedDevice,
-                        value = device?.name ?: strings.notConnected,
-                        onClick = onNavigateToBlePairing
-                    )
-                    SettingsItem(
-                        icon = Icons.Default.PhoneIphone,
-                        label = strings.deviceDetails,
-                        value = if (device?.connectionStatus == ConnectionStatus.CONNECTED) strings.viewInfo else strings.disconnected,
-                        onClick = onNavigateToDeviceDetail
-                    )
-                }
-            }
-        }
 
 
         ElevatedCard {

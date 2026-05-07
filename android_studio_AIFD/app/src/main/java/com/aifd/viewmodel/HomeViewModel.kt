@@ -50,12 +50,36 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         val ctx = application.applicationContext
+        val prefs = ctx.getSharedPreferences("aifd_prefs", Context.MODE_PRIVATE)
+        val savedDeviceName = prefs.getString("device_name", null)
+        val savedDeviceMac = prefs.getString("device_mac", null)
+        
+        if (savedDeviceName != null && savedDeviceMac != null) {
+            val initialStatus = if (MockDataProvider.DEMO_MODE) ConnectionStatus.CONNECTED else ConnectionStatus.DISCONNECTED
+            _uiState.update { 
+                it.copy(
+                    device = DeviceInfo(
+                        id = savedDeviceMac,
+                        name = savedDeviceName,
+                        battery = if (MockDataProvider.DEMO_MODE) 85 else 0,
+                        signalStrength = if (MockDataProvider.DEMO_MODE) -55 else 0,
+                        connectionStatus = initialStatus
+                    )
+                )
+            }
+        }
+
         val intent = Intent(ctx, BleForegroundService::class.java)
         ctx.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
     }
 
-    /** Called from AppNavigation when BLE device state changes */
     fun updateDevice(device: DeviceInfo?) {
+        val isDemo = MockDataProvider.DEMO_MODE
+        
+        if (isDemo && device == null) {
+            // For demo account, keep the existing mock device if new one is null
+            return
+        }
         _uiState.update { it.copy(device = device) }
     }
 

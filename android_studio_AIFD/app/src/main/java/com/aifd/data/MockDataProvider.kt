@@ -10,6 +10,11 @@ import kotlin.random.Random
  * In production, this would be replaced by real BLE data sources.
  */
 object MockDataProvider {
+    /**
+     * Set this to true to simulate a connected device and mock data flow.
+     * Set to false to require a real BLE connection with ESP32-S3.
+     */
+    const val DEMO_MODE = false
 
     val device = DeviceInfo(
         name = "AIFD Wearable Pro",

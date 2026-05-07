@@ -4,8 +4,10 @@ import android.annotation.SuppressLint
 import android.bluetooth.*
 import android.bluetooth.le.*
 import android.content.Context
+import android.media.MediaPlayer
 import android.os.Handler
 import android.os.Looper
+import android.media.AudioManager
 import android.util.Log
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -96,6 +98,27 @@ class BleManager(private val context: Context) {
     private val _nearbyDevices = MutableStateFlow<List<ScannedDevice>>(emptyList())
     val nearbyDevices = _nearbyDevices.asStateFlow()
 
+    private val _isVibrating = MutableStateFlow(false)
+    val isVibrating = _isVibrating.asStateFlow()
+
+    private val _isSoundEnabled = MutableStateFlow(true)
+    val isSoundEnabled = _isSoundEnabled.asStateFlow()
+
+    fun setSoundEnabled(enabled: Boolean) {
+        _isSoundEnabled.value = enabled
+    }
+    fun stopAlertSound() {
+        try {
+            mediaPlayer?.stop()
+            mediaPlayer?.release()
+            mediaPlayer = null
+            Log.i(TAG, "Alert sound stopped")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping alert sound: ${e.message}")
+        }
+    }
+
+
     // ── Internal ─────────────────────────────────────────────────────────
     private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     private val bluetoothAdapter: BluetoothAdapter? = bluetoothManager.adapter
@@ -103,6 +126,7 @@ class BleManager(private val context: Context) {
     private var bluetoothGatt: BluetoothGatt? = null
     private val handler = Handler(Looper.getMainLooper())
     private val discoveredDevices = mutableListOf<ScannedDevice>()
+    private var mediaPlayer: MediaPlayer? = null
 
     // Queue for sequential GATT descriptor writes (BLE only supports one at a time)
     private val descriptorWriteQueue = LinkedList<BluetoothGattDescriptor>()
@@ -160,6 +184,9 @@ class BleManager(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     fun startScan() {
+        // Explicitly stop any previous scan to avoid SCAN_FAILED_ALREADY_STARTED (Error 1)
+        try { bluetoothLeScanner?.stopScan(leScanCallback) } catch (_: Exception) {}
+
         if (_bleState.value is BleState.Scanning) return
         
         Log.i(TAG, "startScan() called")
@@ -179,7 +206,10 @@ class BleManager(private val context: Context) {
             val bonded = bluetoothAdapter?.bondedDevices ?: emptySet()
             bonded.forEach { device ->
                 val name = try { device.name ?: "Unknown" } catch (_: Exception) { "Unknown" }
-                discoveredDevices.add(ScannedDevice(name, device.address, -50))
+                // Only show devices with S3_ prefix
+                if (name.startsWith("S3_")) {
+                    discoveredDevices.add(ScannedDevice(name, device.address, -50))
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error getting bonded devices: ${e.message}")
@@ -233,6 +263,9 @@ class BleManager(private val context: Context) {
                     result.scanRecord?.deviceName ?: "Unknown Device"
                 }
                 
+                // Filter: only show devices starting with S3_
+                if (!name.startsWith("S3_")) return
+
                 discoveredDevices.add(ScannedDevice(name, address, result.rssi))
                 _nearbyDevices.value = discoveredDevices.toList()
                 Log.d(TAG, "Discovered: $name ($address)")
@@ -455,6 +488,10 @@ class BleManager(private val context: Context) {
             if (prediction == "fall" && fallProb >= 0.40f) {
                 Log.w(TAG, "⚠️ FALL DETECTED! prob=$fallProb")
                 _fallDetected.tryEmit(FallStatus(sequence, timestampSec, prediction, statusCode, fallProb, nonFallProb))
+                
+                // Trigger both vibration and sound
+                vibrateDevice() 
+                playAlertSound()
             }
         } catch (e: Exception) {
             Log.e(TAG, "parseAlertPayload error: ${e.message}")
@@ -495,5 +532,66 @@ class BleManager(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "parseVitalsPayload error: ${e.message}")
         }
+    }
+
+    private fun playAlertSound() {
+        if (!_isSoundEnabled.value) {
+            Log.i(TAG, "Sound alert is disabled by user")
+            return
+        }
+
+        try {
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            
+            // 1. SYSTEM LEVEL: Force MAX volume for ALARM stream
+            val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
+            audioManager.setStreamVolume(AudioManager.STREAM_ALARM, maxVolume, 0)
+
+            // 2. PLAYER LEVEL: Clean up and initialize
+            mediaPlayer?.stop()
+            mediaPlayer?.release()
+            mediaPlayer = null
+            
+            val resId = context.resources.getIdentifier("event_sos", "raw", context.packageName)
+            if (resId != 0) {
+                mediaPlayer = MediaPlayer()
+                
+                // 3. CHANNEL LEVEL: Set attributes to bypass DND and Silent modes
+                val audioAttributes = android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_ALARM)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+                
+                mediaPlayer?.setAudioAttributes(audioAttributes)
+                
+                // 4. RESOURCE LOADING
+                val afd = context.resources.openRawResourceFd(resId)
+                mediaPlayer?.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                afd.close()
+                
+                mediaPlayer?.prepare()
+                
+                // 5. GAIN LEVEL: Force 100% output on both left and right channels
+                mediaPlayer?.setVolume(1f, 1f)
+                
+                mediaPlayer?.setOnCompletionListener { 
+                    it.release() 
+                    mediaPlayer = null
+                }
+                mediaPlayer?.start()
+                Log.i(TAG, "Playing emergency alert: event_sos at TRIPLE-MAX volume")
+            } else {
+                Log.e(TAG, "!!! CRITICAL: Sound file 'event_sos' NOT FOUND in res/raw !!!")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error playing alert sound: ${e.message}")
+        }
+    }
+
+    private fun vibrateDevice() {
+        // Assume there is a vibration logic already or we can add it here
+        // If there's an existing vibrate() function, we use it.
+        _isVibrating.value = true
+        handler.postDelayed({ _isVibrating.value = false }, 3000)
     }
 }

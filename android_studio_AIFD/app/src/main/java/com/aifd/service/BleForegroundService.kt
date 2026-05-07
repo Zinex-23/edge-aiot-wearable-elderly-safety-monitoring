@@ -242,12 +242,14 @@ class BleForegroundService : Service() {
         _countdownSeconds.value = 15
         dismissFallAlertNotification()
         releaseWakeLock()
+        bleManager.stopAlertSound()
     }
 
     fun callNow() {
         emergencyCountdownJob?.cancel()
         emergencyCountdownJob = null
         _isFallAlertActive.value = false
+        bleManager.stopAlertSound()
         dismissFallAlertNotification()
         placeEmergencyCall()
     }

@@ -70,8 +70,28 @@ class DeviceViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     init {
-        // Start + bind the service
+        // Load saved device for demo purposes
         val ctx = application.applicationContext
+        val prefs = ctx.getSharedPreferences("aifd_prefs", Context.MODE_PRIVATE)
+        val savedName = prefs.getString("device_name", null)
+        val savedMac = prefs.getString("device_mac", null)
+        
+        if (savedName != null && savedMac != null) {
+            val initialStatus = if (MockDataProvider.DEMO_MODE) ConnectionStatus.CONNECTED else ConnectionStatus.DISCONNECTED
+            _uiState.update {
+                it.copy(
+                    device = DeviceInfo(
+                        id = savedMac,
+                        name = savedName,
+                        battery = if (MockDataProvider.DEMO_MODE) 85 else 0,
+                        signalStrength = if (MockDataProvider.DEMO_MODE) -55 else 0,
+                        connectionStatus = initialStatus
+                    )
+                )
+            }
+        }
+
+        // Start + bind the service
         BleForegroundService.start(ctx)
         val intent = Intent(ctx, BleForegroundService::class.java)
         ctx.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
@@ -83,6 +103,8 @@ class DeviceViewModel(application: Application) : AndroidViewModel(application) 
         // Observe BLE state
         viewModelScope.launch {
             svc.bleManager.bleState.collect { state ->
+                val isDemo = MockDataProvider.DEMO_MODE
+                
                 when (state) {
                     is BleManager.BleState.Connected -> {
                         val newDevice = DeviceInfo(
@@ -103,13 +125,25 @@ class DeviceViewModel(application: Application) : AndroidViewModel(application) 
                     }
                     is BleManager.BleState.Disconnected -> {
                         _uiState.update { s ->
-                            s.device?.let { d ->
+                            // For demo account "000", if we have a saved device, 
+                            // don't show it as disconnected unless explicitly requested.
+                            val isDemo = MockDataProvider.DEMO_MODE
+                            
+                            if (isDemo && s.device != null) {
                                 s.copy(
-                                    device = d.copy(connectionStatus = ConnectionStatus.DISCONNECTED),
+                                    device = s.device.copy(connectionStatus = ConnectionStatus.CONNECTED),
                                     isScanning = false,
                                     connectingDeviceId = null
                                 )
-                            } ?: s.copy(isScanning = false, connectingDeviceId = null)
+                            } else {
+                                s.device?.let { d ->
+                                    s.copy(
+                                        device = d.copy(connectionStatus = ConnectionStatus.DISCONNECTED),
+                                        isScanning = false,
+                                        connectingDeviceId = null
+                                    )
+                                } ?: s.copy(isScanning = false, connectingDeviceId = null)
+                            }
                         }
                     }
                     is BleManager.BleState.Error -> {
