@@ -44,3 +44,25 @@ Các tham số không có cùng kích thước do yêu cầu về độ chính x
 | **TỔNG CỘNG (File Size)** | **10,967** | **100%** |
 
 **Ghi chú:** Với các mô hình siêu nhỏ (Tiny models), phần Overhead luôn chiếm tỷ trọng cao. Khi mô hình mở rộng về số lượng tham số, tỷ trọng của Overhead sẽ giảm dần so với dữ liệu trọng số thực tế.
+
+---
+
+## 4. Công thức tính toán chi tiết (Thế số)
+
+Dưới đây là công thức hoàn chỉnh với các con số cụ thể để tính ra kết quả cuối cùng:
+
+**Bước 1: Tính dung lượng phần tham số (Weights & Biases)**
+- Weights (INT8): $2,880 \times 1 = 2,880 \text{ Bytes}$
+- Biases (INT32): $81 \times 4 = 324 \text{ Bytes}$
+- Normalization (Float32): $13 \times 4 = 52 \text{ Bytes}$
+- **Tổng Params**: $2,880 + 324 + 52 = 3,256 \text{ Bytes}$
+
+**Bước 2: Cộng với dung lượng phụ trội (Overhead)**
+- Overhead (Cấu trúc TFLite): $7,711 \text{ Bytes}$
+- **Tổng cộng**: $3,256 + 7,711 = 10,967 \text{ Bytes}$
+
+**Bước 3: Quy đổi kết quả cuối cùng**
+- $10,967 \text{ Bytes} \div 1,000 = \mathbf{10.967 \text{ KB}}$
+
+*(Ghi chú: Kết quả 10.967 KB được trình bày theo hệ thập phân (1 KB = 1000 Bytes) để khớp chính xác với con số 10,967 bytes của file).*
+
