@@ -32,6 +32,22 @@ import com.aifd.ui.theme.AppThemeMode
 class MainActivity : ComponentActivity() {
 
     private var _startOnFallAlert = mutableStateOf(false)
+    private var bleService: com.aifd.service.BleForegroundService? = null
+    private var isBound = false
+
+    private val serviceConnection = object : android.content.ServiceConnection {
+        override fun onServiceConnected(name: android.content.ComponentName?, binder: android.os.IBinder?) {
+            val localBinder = binder as? com.aifd.service.BleForegroundService.LocalBinder
+            bleService = localBinder?.getService()
+            isBound = true
+            bleService?.setAppForeground(true)
+        }
+
+        override fun onServiceDisconnected(name: android.content.ComponentName?) {
+            bleService = null
+            isBound = false
+        }
+    }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -65,6 +81,10 @@ class MainActivity : ComponentActivity() {
         // Initial check for fall alert
         _startOnFallAlert.value = intent?.action == com.aifd.service.BleForegroundService.ACTION_FALL_DETECTED
                 || intent?.getBooleanExtra("is_fall", false) == true
+
+        // Bind to service to manage foreground state
+        val intent = Intent(this, com.aifd.service.BleForegroundService::class.java)
+        bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
 
         setContent {
             var startOnFallAlert by _startOnFallAlert
@@ -249,6 +269,24 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        bleService?.setAppForeground(true)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        bleService?.setAppForeground(false)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        if (isBound) {
+            unbindService(serviceConnection)
+            isBound = false
         }
     }
 }

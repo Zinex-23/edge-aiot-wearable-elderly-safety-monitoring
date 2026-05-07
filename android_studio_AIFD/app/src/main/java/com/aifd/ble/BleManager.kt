@@ -127,6 +127,7 @@ class BleManager(private val context: Context) {
     private val handler = Handler(Looper.getMainLooper())
     private val discoveredDevices = mutableListOf<ScannedDevice>()
     private var mediaPlayer: MediaPlayer? = null
+    private var lastScanUpdateTimestamp = 0L
 
     // Queue for sequential GATT descriptor writes (BLE only supports one at a time)
     private val descriptorWriteQueue = LinkedList<BluetoothGattDescriptor>()
@@ -204,11 +205,15 @@ class BleManager(private val context: Context) {
         // Show bonded devices immediately
         try {
             val bonded = bluetoothAdapter?.bondedDevices ?: emptySet()
-            bonded.forEach { device ->
-                val name = try { device.name ?: "Unknown" } catch (_: Exception) { "Unknown" }
-                // Show devices with S3_ or ESP32 prefix
-                if (name.startsWith("S3_") || name.startsWith("ESP32")) {
-                    discoveredDevices.add(ScannedDevice(name, device.address, -50))
+            synchronized(discoveredDevices) {
+                bonded.forEach { device ->
+                    val name = try { device.name ?: "Unknown" } catch (_: Exception) { "Unknown" }
+                    val lowercaseName = name.lowercase()
+                    // Only show bonded devices that match our naming convention
+                    // BUT if we found very few devices, show them all anyway to be safe
+                    if (lowercaseName.contains("s3") || lowercaseName.contains("esp") || bonded.size <= 3) {
+                        discoveredDevices.add(ScannedDevice(name, device.address, -50))
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -237,8 +242,8 @@ class BleManager(private val context: Context) {
                 return
             }
             
-            Log.i(TAG, "Starting filtered scan for SVC: $SERVICE_UUID")
-            bluetoothLeScanner?.startScan(filters, settings, leScanCallback)
+            Log.i(TAG, "Starting scan (unfiltered for better compatibility)")
+            bluetoothLeScanner?.startScan(null, settings, leScanCallback)
         } catch (e: Exception) {
             Log.e(TAG, "Error starting scan: ${e.message}")
             _bleState.value = BleState.Error("Lỗi scan: ${e.message}")
@@ -256,19 +261,27 @@ class BleManager(private val context: Context) {
     private val leScanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val address = result.device.address
-            if (discoveredDevices.none { it.address == address }) {
-                val name = try { 
-                    result.device.name ?: result.scanRecord?.deviceName ?: "Unknown Device"
-                } catch (_: Exception) {
-                    result.scanRecord?.deviceName ?: "Unknown Device"
-                }
-                
-                // Filter: show devices starting with S3_ or ESP32
-                if (!name.startsWith("S3_") && !name.startsWith("ESP32")) return
+            val name = try { 
+                result.device.name ?: result.scanRecord?.deviceName ?: "Unknown"
+            } catch (_: Exception) {
+                result.scanRecord?.deviceName ?: "Unknown"
+            }
+            
+            val lowercaseName = name.lowercase()
+            // Strict filter for active scan: must contain s3 or esp
+            if (!lowercaseName.contains("s3") && !lowercaseName.contains("esp")) return
 
-                discoveredDevices.add(ScannedDevice(name, address, result.rssi))
-                _nearbyDevices.value = discoveredDevices.toList()
-                Log.d(TAG, "Discovered: $name ($address)")
+            synchronized(discoveredDevices) {
+                if (discoveredDevices.none { it.address == address }) {
+                    discoveredDevices.add(ScannedDevice(name, address, result.rssi))
+                    
+                    // Throttle updates to avoid overloading the UI thread (preventing "ACTION_HOVER_EXIT" crashes)
+                    val now = System.currentTimeMillis()
+                    if (now - lastScanUpdateTimestamp > 500L || discoveredDevices.size == 1) {
+                        _nearbyDevices.value = discoveredDevices.toList()
+                        lastScanUpdateTimestamp = now
+                    }
+                }
             }
         }
         override fun onScanFailed(errorCode: Int) {
@@ -298,17 +311,20 @@ class BleManager(private val context: Context) {
     @SuppressLint("MissingPermission")
     private fun connectGatt(device: BluetoothDevice) {
         try {
-            // Close any existing connection
-            bluetoothGatt?.disconnect()
-            bluetoothGatt?.close()
-            bluetoothGatt = null
-
-            Log.i(TAG, "Connecting GATT to device (${device.address} - ${device.name})…")
-            // Use autoConnect = false for direct connection
-            bluetoothGatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
-            } else {
-                device.connectGatt(context, false, gattCallback)
+            // Reset state before connecting
+            handler.post {
+                _bleState.value = BleState.Idle
+                bluetoothGatt?.disconnect()
+                bluetoothGatt?.close()
+                bluetoothGatt = null
+                
+                handler.postDelayed({
+                    bluetoothGatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+                    } else {
+                        device.connectGatt(context, false, gattCallback)
+                    }
+                }, 200) // Small delay to let stack settle
             }
         } catch (e: SecurityException) {
             Log.e(TAG, "SecurityException in connectGatt: ${e.message}")
@@ -327,6 +343,7 @@ class BleManager(private val context: Context) {
         bluetoothGatt?.close()
         bluetoothGatt = null
         _bleState.value = BleState.Disconnected
+        _nearbyDevices.value = emptyList()
     }
 
     private fun retryConnectionAfterDelay() {

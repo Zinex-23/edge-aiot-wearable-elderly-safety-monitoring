@@ -229,44 +229,93 @@ private fun HeartRateContent(
     }
 
     // Chart
-    ElevatedCard(shape = RoundedCornerShape(16.dp)) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(strings.heartRateTrend, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                if (uiState.timeRange == TimeRange.LIVE) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.FiberManualRecord, contentDescription = null, tint = AIFDThemeExt.colors.safe, modifier = Modifier.size(8.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text(strings.updating, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    if (uiState.timeRange != TimeRange.LIVE) {
+        ElevatedCard(shape = RoundedCornerShape(16.dp)) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(strings.heartRateTrend, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                }
+                Spacer(Modifier.height(8.dp))
+                LineChart(
+                    data = uiState.chartData,
+                    lineColor = MaterialTheme.colorScheme.error,
+                    fillColor = MaterialTheme.colorScheme.error.copy(alpha = 0.1f)
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    val startLabel = when (uiState.timeRange) {
+                        TimeRange.LIVE -> "20s"
+                        TimeRange.ONE_HOUR -> "1h"
+                        TimeRange.TWENTY_FOUR_HOURS -> "24h"
                     }
+                    Text(startLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(strings.now, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-            }
-            Spacer(Modifier.height(8.dp))
-            LineChart(
-                data = uiState.chartData,
-                lineColor = MaterialTheme.colorScheme.error,
-                fillColor = MaterialTheme.colorScheme.error.copy(alpha = 0.1f)
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                val startLabel = when (uiState.timeRange) {
-                    TimeRange.LIVE -> "20s"
-                    TimeRange.ONE_HOUR -> "1h"
-                    TimeRange.TWENTY_FOUR_HOURS -> "24h"
-                }
-                Text(startLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(strings.now, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
 
-    StatsRow(stats)
+    if (uiState.timeRange != TimeRange.LIVE) {
+        StatsRow(stats)
+    }
+
+    // Info card for Heart Rate
+    ElevatedCard(
+        shape = RoundedCornerShape(24.dp),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Box(
+            modifier = Modifier
+                .background(
+                    Brush.linearGradient(
+                        colors = listOf(
+                            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.8f),
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                        )
+                    )
+                )
+                .padding(16.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.1f),
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Info,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(8.dp)
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = strings.normalHeartRateRange,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                    Text(
+                        text = strings.heartRateWarning,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        lineHeight = androidx.compose.ui.unit.TextUnit.Unspecified
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -309,44 +358,41 @@ private fun SpO2Content(
         }
     }
 
-    ElevatedCard(shape = RoundedCornerShape(16.dp)) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(strings.spo2Trend, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                if (uiState.timeRange == TimeRange.LIVE) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.FiberManualRecord, contentDescription = null, tint = AIFDThemeExt.colors.safe, modifier = Modifier.size(8.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text(strings.updating, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    if (uiState.timeRange != TimeRange.LIVE) {
+        ElevatedCard(shape = RoundedCornerShape(16.dp)) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(strings.spo2Trend, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                }
+                Spacer(Modifier.height(8.dp))
+                LineChart(
+                    data = uiState.chartData,
+                    lineColor = MaterialTheme.colorScheme.primary,
+                    fillColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    val startLabel = when (uiState.timeRange) {
+                        TimeRange.LIVE -> "20s"
+                        TimeRange.ONE_HOUR -> "1h"
+                        TimeRange.TWENTY_FOUR_HOURS -> "24h"
                     }
+                    Text(startLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(strings.now, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-            }
-            Spacer(Modifier.height(8.dp))
-            LineChart(
-                data = uiState.chartData,
-                lineColor = MaterialTheme.colorScheme.primary,
-                fillColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                val startLabel = when (uiState.timeRange) {
-                    TimeRange.LIVE -> "20s"
-                    TimeRange.ONE_HOUR -> "1h"
-                    TimeRange.TWENTY_FOUR_HOURS -> "24h"
-                }
-                Text(startLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(strings.now, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
 
-    StatsRow(stats, "%")
+    if (uiState.timeRange != TimeRange.LIVE) {
+        StatsRow(stats, "%")
+    }
 
     // Info card
     ElevatedCard(

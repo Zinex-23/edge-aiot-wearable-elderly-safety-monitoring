@@ -90,6 +90,28 @@ fun AppNavigation(
     onLogout: () -> Unit
 ) {
     val navController = rememberNavController()
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    // Sync navigation when alert is dismissed (e.g. from notification button)
+    DisposableEffect(Unit) {
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
+                if (intent?.action == com.aifd.service.BleForegroundService.ACTION_DISMISS_SAFE) {
+                    navController.popBackStack(Screen.Home.route, inclusive = false)
+                    onFallAlertHandled()
+                }
+            }
+        }
+        val filter = android.content.IntentFilter(com.aifd.service.BleForegroundService.ACTION_DISMISS_SAFE)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(receiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            context.registerReceiver(receiver, filter)
+        }
+        onDispose {
+            context.unregisterReceiver(receiver)
+        }
+    }
 
     // Handle initial fall alert navigation from intent
     LaunchedEffect(startOnFallAlert) {
@@ -123,7 +145,6 @@ fun AppNavigation(
         return
     }
 
-    val context = LocalContext.current
     val factory = ViewModelProvider.AndroidViewModelFactory.getInstance(
         context.applicationContext as android.app.Application
     )
@@ -363,7 +384,12 @@ fun AppNavigation(
                     device = deviceState.device,
                     onRename = deviceViewModel::renameDevice,
                     onReconnect = deviceViewModel::reconnectDevice,
-                    onDisconnect = deviceViewModel::disconnectDevice,
+                    onDisconnect = {
+                        deviceViewModel.disconnectDevice()
+                        navController.navigate(Screen.Home.route) {
+                            popUpTo(Screen.Home.route) { inclusive = true }
+                        }
+                    },
                     onNavigateToBlePairing = { navController.navigate(Screen.DevicePairing.route) },
                     onBack = { navController.popBackStack() }
                 )

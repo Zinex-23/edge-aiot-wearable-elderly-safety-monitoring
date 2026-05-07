@@ -110,6 +110,15 @@ class BleForegroundService : Service() {
         private set
 
     private var wakeLock: PowerManager.WakeLock? = null
+    private var isAppInForeground = false
+
+    fun setAppForeground(inForeground: Boolean) {
+        isAppInForeground = inForeground
+        if (inForeground && _isFallAlertActive.value) {
+            // If we are now in foreground and alert is active, hide the heads-up notification
+            dismissFallAlertNotification()
+        }
+    }
     // ─── Binder for UI binding ───────────────────────────────────────────────
     inner class LocalBinder : Binder() {
         fun getService(): BleForegroundService = this@BleForegroundService
@@ -230,6 +239,10 @@ class BleForegroundService : Service() {
             Log.w(TAG, "Countdown expired — auto-calling!")
             _isFallAlertActive.value = false
             dismissFallAlertNotification()
+            
+            // Notify UI to go to Home if it was on alert screen
+            sendBroadcast(Intent(ACTION_DISMISS_SAFE).apply { `package` = packageName })
+            
             placeEmergencyCall()
         }
     }
@@ -243,6 +256,9 @@ class BleForegroundService : Service() {
         dismissFallAlertNotification()
         releaseWakeLock()
         bleManager.stopAlertSound()
+        
+        // Notify UI to go to Home
+        sendBroadcast(Intent(ACTION_DISMISS_SAFE).apply { `package` = packageName })
     }
 
     fun callNow() {
@@ -351,6 +367,13 @@ class BleForegroundService : Service() {
     }
 
     private fun showFallAlertNotification(secondsLeft: Int = 15) {
+        // If app is already in foreground and showing the full-screen UI, 
+        // we don't need the heads-up notification cluttering the top.
+        if (isAppInForeground) {
+            Log.d(TAG, "App is in foreground, skipping heads-up notification")
+            return
+        }
+
         val fullScreenIntent = PendingIntent.getActivity(
             this, 1,
             Intent(this, MainActivity::class.java).apply {

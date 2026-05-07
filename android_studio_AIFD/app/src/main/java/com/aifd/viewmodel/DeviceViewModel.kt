@@ -125,25 +125,11 @@ class DeviceViewModel(application: Application) : AndroidViewModel(application) 
                     }
                     is BleManager.BleState.Disconnected -> {
                         _uiState.update { s ->
-                            // For demo account "000", if we have a saved device, 
-                            // don't show it as disconnected unless explicitly requested.
-                            val isDemo = MockDataProvider.DEMO_MODE
-                            
-                            if (isDemo && s.device != null) {
-                                s.copy(
-                                    device = s.device.copy(connectionStatus = ConnectionStatus.CONNECTED),
-                                    isScanning = false,
-                                    connectingDeviceId = null
-                                )
-                            } else {
-                                s.device?.let { d ->
-                                    s.copy(
-                                        device = d.copy(connectionStatus = ConnectionStatus.DISCONNECTED),
-                                        isScanning = false,
-                                        connectingDeviceId = null
-                                    )
-                                } ?: s.copy(isScanning = false, connectingDeviceId = null)
-                            }
+                            s.copy(
+                                device = null,
+                                isScanning = false,
+                                connectingDeviceId = null
+                            )
                         }
                     }
                     is BleManager.BleState.Error -> {
@@ -210,11 +196,7 @@ class DeviceViewModel(application: Application) : AndroidViewModel(application) 
 
     fun disconnectDevice() {
         service?.bleManager?.disconnect()
-        _uiState.update { state ->
-            state.device?.let { d ->
-                state.copy(device = d.copy(connectionStatus = ConnectionStatus.DISCONNECTED))
-            } ?: state
-        }
+        _uiState.update { it.copy(device = null) }
     }
 
     fun reconnectDevice() {

@@ -36,8 +36,6 @@ fun DeviceDetailScreen(
     onBack: () -> Unit = {}
 ) {
     val strings = AppLocalizations.strings
-    var isRenaming by remember { mutableStateOf(false) }
-    var newName by remember { mutableStateOf(device?.name ?: "") }
     var showDisconnectDialog by remember { mutableStateOf(false) }
 
     if (device == null) {
@@ -87,29 +85,7 @@ fun DeviceDetailScreen(
                 }
                 Spacer(Modifier.height(16.dp))
 
-                if (isRenaming) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = newName,
-                            onValueChange = { newName = it },
-                            singleLine = true,
-                            modifier = Modifier.width(200.dp)
-                        )
-                        IconButton(onClick = {
-                            if (newName.isNotBlank()) {
-                                onRename(newName)
-                                isRenaming = false
-                            }
-                        }) {
-                            Icon(Icons.Default.Check, contentDescription = strings.save)
-                        }
-                    }
-                } else {
-                    Text(device.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                }
+                Text(device.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
 
                 Spacer(Modifier.height(8.dp))
                 StatusBadge(
@@ -183,17 +159,6 @@ fun DeviceDetailScreen(
                         Spacer(Modifier.width(8.dp))
                         Text(strings.disconnect, fontWeight = FontWeight.SemiBold)
                     }
-                }
-                OutlinedButton(
-                    onClick = { isRenaming = true },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text(strings.renameDevice, fontWeight = FontWeight.SemiBold)
                 }
             }
 

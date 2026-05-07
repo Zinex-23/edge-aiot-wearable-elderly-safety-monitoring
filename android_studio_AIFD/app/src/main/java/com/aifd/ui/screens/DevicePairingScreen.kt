@@ -15,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -150,109 +151,157 @@ fun DevicePairingScreen(
                         val isConnecting = connectingDeviceId == nearby.id
                         val isConnected = currentDevice?.id == nearby.id
 
-                        ElevatedCard(
-                            shape = RoundedCornerShape(12.dp),
-                            colors = if (isConnected) CardDefaults.elevatedCardColors(
-                                containerColor = AIFDThemeExt.colors.safeContainer.copy(alpha = 0.3f)
-                            ) else CardDefaults.elevatedCardColors()
+                        Card(
+                            onClick = { if (!isConnecting && !isConnected) onConnect(nearby) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            shape = RoundedCornerShape(20.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (isConnected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
+                                                else MaterialTheme.colorScheme.surface
+                            ),
+                            elevation = CardDefaults.cardElevation(
+                                defaultElevation = if (isConnected) 0.dp else 2.dp
+                            ),
+                            border = if (isConnected) {
+                                androidx.compose.foundation.BorderStroke(
+                                    1.dp, 
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+                                )
+                            } else null
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(16.dp)
                                 ) {
+                                    // Bluetooth Icon with specialized background
                                     Box(
                                         modifier = Modifier
-                                            .size(48.dp)
-                                            .clip(RoundedCornerShape(12.dp))
+                                            .size(52.dp)
+                                            .clip(RoundedCornerShape(16.dp))
                                             .background(
-                                                if (isConnected) AIFDThemeExt.colors.safeContainer
-                                                else MaterialTheme.colorScheme.primaryContainer
+                                                if (isConnected) MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
+                                                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                                             ),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
-                                            Icons.Default.Bluetooth,
+                                            imageVector = Icons.Default.Bluetooth,
                                             contentDescription = null,
-                                            tint = if (isConnected) AIFDThemeExt.colors.safe
-                                                   else MaterialTheme.colorScheme.primary
+                                            tint = if (isConnected) MaterialTheme.colorScheme.primary
+                                                   else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(26.dp)
                                         )
                                     }
 
                                     Column(modifier = Modifier.weight(1f)) {
-                                        Text(nearby.name, fontWeight = FontWeight.Medium)
+                                        Text(
+                                            text = nearby.name,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Spacer(Modifier.height(4.dp))
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                                         ) {
-                                            val signalIcon = when {
-                                                nearby.signalStrength >= -50 -> Icons.Default.SignalWifi4Bar
-                                                nearby.signalStrength >= -65 -> Icons.Default.NetworkWifi3Bar
-                                                else -> Icons.Default.NetworkWifi1Bar
+                                            val (signalIcon, signalColor) = when {
+                                                nearby.signalStrength >= -50 -> Icons.Default.SignalWifi4Bar to AIFDThemeExt.colors.safe
+                                                nearby.signalStrength >= -65 -> Icons.Default.NetworkWifi3Bar to AIFDThemeExt.colors.warning
+                                                else -> Icons.Default.NetworkWifi1Bar to MaterialTheme.colorScheme.error
                                             }
-                                            val signalLabel = when {
-                                                nearby.signalStrength >= -50 -> strings.excellent
-                                                nearby.signalStrength >= -60 -> strings.good
-                                                nearby.signalStrength >= -70 -> strings.fair
-                                                else -> strings.weak
-                                            }
-                                            Icon(signalIcon, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                                            Text(signalLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            Icon(
+                                                imageVector = signalIcon,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(14.dp),
+                                                tint = signalColor
+                                            )
+                                            Text(
+                                                text = "${nearby.signalStrength} dBm",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
                                         }
                                     }
 
-                                    when {
-                                        isConnecting -> {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                            ) {
-                                                Icon(Icons.Default.Sync, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                                                Text(strings.connecting, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Medium)
+                                    // Action area
+                                    Box(contentAlignment = Alignment.Center) {
+                                        when {
+                                            isConnecting -> {
+                                                val infiniteTransition = rememberInfiniteTransition(label = "loading")
+                                                val rotation by infiniteTransition.animateFloat(
+                                                    initialValue = 0f,
+                                                    targetValue = 360f,
+                                                    animationSpec = infiniteRepeatable(
+                                                        animation = tween(1000, easing = LinearEasing),
+                                                        repeatMode = RepeatMode.Restart
+                                                    ),
+                                                    label = "rotation"
+                                                )
+                                                Icon(
+                                                    imageVector = Icons.Default.Refresh,
+                                                    contentDescription = null,
+                                                    modifier = Modifier
+                                                        .size(24.dp)
+                                                        .graphicsLayer { rotationZ = rotation },
+                                                    tint = MaterialTheme.colorScheme.primary
+                                                )
                                             }
-                                        }
-                                        isConnected -> {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                            ) {
-                                                Icon(Icons.Default.Check, contentDescription = null, tint = AIFDThemeExt.colors.safe, modifier = Modifier.size(20.dp))
-                                                Text(strings.connected, style = MaterialTheme.typography.labelMedium, color = AIFDThemeExt.colors.safe, fontWeight = FontWeight.Medium)
+                                            isConnected -> {
+                                                Surface(
+                                                    shape = CircleShape,
+                                                    color = AIFDThemeExt.colors.safe.copy(alpha = 0.1f),
+                                                    contentColor = AIFDThemeExt.colors.safe
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                                    ) {
+                                                        Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                        Text(strings.connected, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                                                    }
+                                                }
                                             }
-                                        }
-                                        else -> {
-                                            Button(
-                                                onClick = { onConnect(nearby) },
-                                                enabled = connectingDeviceId == null,
-                                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-                                            ) {
-                                                Text(strings.connect)
+                                            else -> {
+                                                Icon(
+                                                    Icons.Default.ChevronRight,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                                )
                                             }
                                         }
                                     }
                                 }
 
                                 if (isConnecting) {
-                                    Spacer(Modifier.height(12.dp))
-                                    LinearProgressIndicator(
-                                        progress = connectionProgress / 100f,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(4.dp)
-                                            .clip(RoundedCornerShape(2.dp))
-                                    )
-                                    Spacer(Modifier.height(4.dp))
-                                    Text(
-                                        text = when {
-                                            connectionProgress < 30 -> strings.discoveringDevice
-                                            connectionProgress < 60 -> strings.establishingConnection
-                                            connectionProgress < 90 -> strings.syncingData
-                                            else -> strings.almostDone
-                                        },
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                    Spacer(Modifier.height(16.dp))
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        LinearProgressIndicator(
+                                            progress = connectionProgress / 100f,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(6.dp)
+                                                .clip(RoundedCornerShape(3.dp)),
+                                            color = MaterialTheme.colorScheme.primary,
+                                            trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
+                                        )
+                                        Text(
+                                            text = when {
+                                                connectionProgress < 30 -> strings.discoveringDevice
+                                                connectionProgress < 60 -> strings.establishingConnection
+                                                connectionProgress < 90 -> strings.syncingData
+                                                else -> strings.almostDone
+                                            },
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
                                 }
                             }
                         }

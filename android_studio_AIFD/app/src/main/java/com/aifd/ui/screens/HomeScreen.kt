@@ -125,77 +125,85 @@ private fun HomeScreenContent(
             onEmergencyClick = if (isWearer) onTriggerFallAlert else null
         )
 
-        if (isWearer && !isConnected) {
-            ElevatedCard(
-                colors = CardDefaults.elevatedCardColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer
-                ),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Warning,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(strings.deviceDisconnected, fontWeight = FontWeight.Medium)
-                        Text(
-                            strings.tapToReconnect,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    OutlinedButton(onClick = onNavigateToBlePairing) {
-                        Text(strings.connect)
-                    }
-                }
-            }
-        }
-
-        if (isWearer && isLowBattery && isConnected) {
-            ElevatedCard(
-                colors = CardDefaults.elevatedCardColors(
-                    containerColor = AIFDThemeExt.colors.warningContainer
-                ),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.BatteryAlert,
-                        contentDescription = null,
-                        tint = AIFDThemeExt.colors.warning
-                    )
-                    Column {
-                        Text(strings.lowBattery, fontWeight = FontWeight.Medium)
-                        Text(
-                            strings.chargeSoon,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        }
-
         if (isWearer) {
-            if (device != null) {
-                DeviceCard(device = device, onClick = onNavigateToDeviceDetail)
-            } else {
-                UnpairedDeviceCard(onClick = onNavigateToBlePairing)
+            when {
+                isConnected -> {
+                    // Show DeviceCard when connected
+                    if (device != null) {
+                        DeviceCard(device = device, onClick = onNavigateToDeviceDetail)
+                        
+                        // Show Low Battery alert if needed (only when connected)
+                        if (isLowBattery) {
+                            ElevatedCard(
+                                colors = CardDefaults.elevatedCardColors(
+                                    containerColor = AIFDThemeExt.colors.warningContainer
+                                ),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.BatteryAlert,
+                                        contentDescription = null,
+                                        tint = AIFDThemeExt.colors.warning
+                                    )
+                                    Column {
+                                        Text(strings.lowBattery, fontWeight = FontWeight.Medium)
+                                        Text(
+                                            strings.chargeSoon,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                device != null -> {
+                    // Show Red Alert Card when disconnected but device is known
+                    ElevatedCard(
+                        colors = CardDefaults.elevatedCardColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(strings.deviceDisconnected, fontWeight = FontWeight.Medium)
+                                Text(
+                                    strings.tapToReconnect,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            OutlinedButton(onClick = onNavigateToBlePairing) {
+                                Text(strings.connect)
+                            }
+                        }
+                    }
+                }
+                else -> {
+                    // Show Unpaired Device Card when no device is paired
+                    UnpairedDeviceCard(onClick = onNavigateToBlePairing)
+                }
             }
         }
 
