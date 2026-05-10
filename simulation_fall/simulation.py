@@ -23,6 +23,8 @@ from collections import deque
 from typing import Any
 
 import psutil
+import numpy as np
+import tensorflow as tf
 from flask import Flask, jsonify, render_template, request
 
 try:
@@ -59,6 +61,7 @@ simulation_state: dict[str, Any] = {
     "ram_usage": 0.0,
     "cpu_usage": 0.0,
     "flash_usage": 0.0,
+    "current_model": "TinyCNN V27 (Actual)",
     "inference_latency_ms": 0.0,
     "fps": 0.0,
     "energy_mJ": 0.0,
@@ -81,9 +84,41 @@ _ble_sample_buf: deque[dict[str, Any]] = deque(maxlen=BLE_WINDOW)
 
 
 class MockModel:
+    def __init__(self):
+        model_path = "/home/zinex/CAPSTONE/AI/edge-aiot-wearable-elderly-safety-monitoring/AI/model_updated_version_27/models/fall_detection_v27.tflite"
+        self.interpreter = tf.lite.Interpreter(model_path=model_path)
+        self.interpreter.allocate_tensors()
+        self.input_details = self.interpreter.get_input_details()
+        self.output_details = self.interpreter.get_output_details()
+
     def predict(self, window: list[dict[str, Any]]) -> str:
-        time.sleep(random.uniform(0.005, 0.020))
-        return random.choices(["fall", "non_fall"], weights=[0.2, 0.8])[0]
+        try:
+            raw_data = np.array([[
+                [s['acc_x'], s['acc_y'], s['acc_z'], s['gyro_x'], s['gyro_y'], s['gyro_z']]
+                for s in window
+            ]], dtype=np.float32)
+            
+            # Auto-quantization for V27 (INT8)
+            if self.input_details[0]['dtype'] == np.int8:
+                scale, zero_point = self.input_details[0]['quantization']
+                input_data = (raw_data / (scale if scale != 0 else 1.0) + zero_point).astype(np.int8)
+            else:
+                input_data = raw_data
+
+            self.interpreter.set_tensor(self.input_details[0]['index'], input_data)
+            self.interpreter.invoke()
+            output_data = self.interpreter.get_tensor(self.output_details[0]['index'])
+            
+            if self.output_details[0]['dtype'] == np.int8:
+                scale, zero_point = self.output_details[0]['quantization']
+                prob = (output_data.astype(np.float32) - zero_point) * (scale if scale != 0 else 1.0)
+            else:
+                prob = output_data
+                
+            return "fall" if prob[0][0] >= 0.4 else "non_fall"
+        except Exception as e:
+            print(f"AI Error: {e}")
+            return "non_fall"
 
 
 model = MockModel()
@@ -154,9 +189,7 @@ def run_inference_on_window(window: list[dict[str, Any]], ground_truth: str) -> 
     if len(window) < BLE_WINDOW:
         return
     inference_start = time.time()
-    raw_prediction = model.predict(window)
-    is_mock_correct = random.random() < 0.9
-    prediction = ground_truth if is_mock_correct else raw_prediction
+    prediction = model.predict(window)
     inference_time = time.time() - inference_start
     latency_ms = inference_time * 1000.0
     is_correct = prediction == ground_truth

@@ -5,6 +5,7 @@ venv/
 .venv/
 env/
 .env/
+AI/venv_v2/
 
 # Generated large artifacts
 /AI/train_model_FallDetection/archive/total_data/all_csv_combined_union.csv
