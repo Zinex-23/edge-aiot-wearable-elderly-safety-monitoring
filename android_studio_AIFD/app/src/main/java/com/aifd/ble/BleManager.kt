@@ -6,6 +6,7 @@ import android.bluetooth.le.*
 import android.content.Context
 import android.media.MediaPlayer
 import android.os.Handler
+import androidx.core.content.edit
 import android.os.Looper
 import android.media.AudioManager
 import android.util.Log
@@ -133,6 +134,17 @@ class BleManager(private val context: Context) {
     private val descriptorWriteQueue = LinkedList<BluetoothGattDescriptor>()
     private var isWritingDescriptor = false
 
+    // Exponential backoff state for reconnection
+    private var reconnectAttempts = 0
+    private val reconnectRunnable = Runnable {
+        if (_bleState.value !is BleState.Connected) {
+            Log.i(TAG, "Exponential backoff retry #$reconnectAttempts")
+            autoConnectBondedEsp32()
+        }
+    }
+
+    fun isBluetoothEnabled(): Boolean = bluetoothAdapter?.isEnabled == true
+
     // =====================================================================
     // 1. AUTO-CONNECT: Find bonded ESP32 and connect GATT automatically
     // =====================================================================
@@ -151,16 +163,26 @@ class BleManager(private val context: Context) {
             return true
         }
         val bonded = bluetoothAdapter?.bondedDevices ?: return false
-        val esp32 = bonded.firstOrNull { device ->
-            val name = device.name ?: ""
-            name.startsWith(ESP32_PREFIX, ignoreCase = true)
+        val savedMac = context.getSharedPreferences("aifd_prefs", Context.MODE_PRIVATE)
+            .getString("device_mac", null)
+
+        // Strategy 1: match by name — "ESP32..." or "S3..." (covers both main firmware and test board)
+        var esp32 = bonded.firstOrNull { device ->
+            val n = device.name ?: return@firstOrNull false
+            n.startsWith("ESP32", ignoreCase = true) || n.startsWith("S3", ignoreCase = true)
         }
+        // Strategy 2: match by stored MAC address (works when device.name returns null)
+        if (esp32 == null && savedMac != null) {
+            esp32 = bonded.firstOrNull { it.address.equals(savedMac, ignoreCase = true) }
+            if (esp32 != null) Log.i(TAG, "Found device by stored MAC $savedMac (name was null)")
+        }
+
         if (esp32 != null) {
-            Log.i(TAG, "Found bonded ESP32: ${esp32.name} (${esp32.address}), auto-connecting…")
+            Log.i(TAG, "Auto-connecting to ${esp32.name ?: "ESP32"} (${esp32.address})…")
             connectGatt(esp32)
             return true
         }
-        Log.i(TAG, "No bonded ESP32 found in ${bonded.size} bonded devices")
+        Log.i(TAG, "No bonded ESP32 found in ${bonded.size} bonded devices (savedMac=$savedMac)")
         return false
     }
 
@@ -202,18 +224,23 @@ class BleManager(private val context: Context) {
 
         discoveredDevices.clear()
 
-        // Show bonded devices immediately
+        // Show ALL bonded devices immediately — user already explicitly paired them,
+        // so no name filter here. device.name can be null when OS hasn't cached it yet.
         try {
             val bonded = bluetoothAdapter?.bondedDevices ?: emptySet()
+            val savedMac = context.getSharedPreferences("aifd_prefs", Context.MODE_PRIVATE)
+                .getString("device_mac", null)
             synchronized(discoveredDevices) {
                 bonded.forEach { device ->
-                    val name = try { device.name ?: "Unknown" } catch (_: Exception) { "Unknown" }
-                    val lowercaseName = name.lowercase()
-                    // Only show bonded devices that match our naming convention
-                    // BUT if we found very few devices, show them all anyway to be safe
-                    if (lowercaseName.contains("s3") || lowercaseName.contains("esp") || bonded.size <= 3) {
-                        discoveredDevices.add(ScannedDevice(name, device.address, -50))
+                    val name = try {
+                        device.name?.takeIf { it.isNotBlank() } ?: "ESP32 (${device.address.takeLast(5)})"
+                    } catch (_: Exception) {
+                        "ESP32 (${device.address.takeLast(5)})"
                     }
+                    // Mark previously-used device to help user identify it
+                    val displayName = if (device.address.equals(savedMac, ignoreCase = true))
+                        "$name ★" else name
+                    discoveredDevices.add(ScannedDevice(displayName, device.address, -50))
                 }
             }
         } catch (e: Exception) {
@@ -223,30 +250,39 @@ class BleManager(private val context: Context) {
 
         if (!isLocationEnabled()) return
 
-        // Also do active BLE scan
+        // Active BLE scan — filtered by Service UUID so only ESP32 advertising our service
+        // is discovered; reduces battery drain and avoids irrelevant devices.
         try {
             bluetoothLeScanner = bluetoothAdapter?.bluetoothLeScanner
-            
-            // Add ScanFilter to improve reliability and potentially bypass "unfiltered" restriction on some devices
-            val filters = listOf(
-                ScanFilter.Builder().setServiceUuid(android.os.ParcelUuid(SERVICE_UUID)).build()
-            )
-            
-            val settings = ScanSettings.Builder()
-                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-                .build()
-            
             if (bluetoothLeScanner == null) {
                 Log.e(TAG, "BluetoothLeScanner is null (BT might be off)")
                 _bleState.value = BleState.Error("Bluetooth đang tắt")
                 return
             }
-            
-            Log.i(TAG, "Starting scan (unfiltered for better compatibility)")
-            bluetoothLeScanner?.startScan(null, settings, leScanCallback)
+
+            val filters = listOf(
+                ScanFilter.Builder()
+                    .setServiceUuid(android.os.ParcelUuid(SERVICE_UUID))
+                    .build()
+            )
+            val settings = ScanSettings.Builder()
+                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                .build()
+
+            Log.i(TAG, "Starting active BLE scan filtered by service UUID")
+            bluetoothLeScanner?.startScan(filters, settings, leScanCallback)
         } catch (e: Exception) {
             Log.e(TAG, "Error starting scan: ${e.message}")
-            _bleState.value = BleState.Error("Lỗi scan: ${e.message}")
+            // Fallback: unfiltered scan if service-UUID filter fails (some Android versions reject it)
+            try {
+                val settings = ScanSettings.Builder()
+                    .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                    .build()
+                bluetoothLeScanner?.startScan(null, settings, leScanCallback)
+                Log.w(TAG, "Falling back to unfiltered scan")
+            } catch (e2: Exception) {
+                _bleState.value = BleState.Error("Lỗi scan: ${e2.message}")
+            }
         }
     }
 
@@ -346,15 +382,35 @@ class BleManager(private val context: Context) {
         _nearbyDevices.value = emptyList()
     }
 
+    private fun refreshGattCache(gatt: BluetoothGatt): Boolean {
+        return try {
+            val method = gatt.javaClass.getMethod("refresh")
+            val result = method.invoke(gatt) as? Boolean ?: false
+            Log.i(TAG, "GATT cache refresh: $result")
+            result
+        } catch (e: Exception) {
+            Log.w(TAG, "GATT cache refresh not available: ${e.message}")
+            false
+        }
+    }
+
     private fun retryConnectionAfterDelay() {
-        handler.removeCallbacksAndMessages(null) // Prevent multiple retry queues
-        handler.postDelayed({
-            val currentState = _bleState.value
-            if (currentState is BleState.Disconnected || currentState is BleState.Error || currentState is BleState.Idle) {
-                Log.i(TAG, "Attempting auto-reconnect… (current state: $currentState)")
-                autoConnectBondedEsp32()
-            }
-        }, 5000) // 5s delay for better stability
+        handler.removeCallbacks(reconnectRunnable)
+        val delayMs = when (reconnectAttempts) {
+            0 -> 2_000L
+            1 -> 5_000L
+            2 -> 10_000L
+            3 -> 20_000L
+            else -> 60_000L
+        }
+        Log.i(TAG, "Scheduling reconnect attempt ${reconnectAttempts + 1} in ${delayMs / 1000}s")
+        reconnectAttempts++
+        handler.postDelayed(reconnectRunnable, delayMs)
+    }
+
+    private fun resetReconnectBackoff() {
+        reconnectAttempts = 0
+        handler.removeCallbacks(reconnectRunnable)
     }
 
     @SuppressLint("MissingPermission")
@@ -366,6 +422,9 @@ class BleManager(private val context: Context) {
                 when (newState) {
                     BluetoothProfile.STATE_CONNECTED -> {
                         if (status == BluetoothGatt.GATT_SUCCESS) {
+                            // Clear Android GATT cache so fresh service discovery finds new
+                            // characteristics added after the last bonding (e.g. new VITALS char)
+                            refreshGattCache(gatt)
                             Log.i(TAG, "GATT connected, requesting MTU 512…")
                             val mtuRequested = gatt.requestMtu(512)
                             if (!mtuRequested) {
@@ -373,16 +432,28 @@ class BleManager(private val context: Context) {
                                 gatt.discoverServices()
                             }
                         } else {
-                            Log.e(TAG, "Connection failed with status $status, closing GATT")
-                            _bleState.value = BleState.Error("Lỗi GATT: $status")
+                            // Connection failed before fully established — full cleanup
+                            Log.e(TAG, "Connection attempt failed with status $status")
+                            bluetoothGatt = null
+                            gatt.disconnect()
                             gatt.close()
+                            _bleState.value = BleState.Error("Lỗi GATT: $status")
                             retryConnectionAfterDelay()
                         }
                     }
                     BluetoothProfile.STATE_DISCONNECTED -> {
-                        Log.i(TAG, "GATT disconnected (status=$status)")
+                        if (status == 133) {
+                            // GATT_ERROR 133: driver may be wedged — must fully teardown before retry
+                            Log.w(TAG, "GATT Error 133 — full teardown before retry")
+                            bluetoothGatt = null
+                            gatt.disconnect()
+                            gatt.close()
+                        } else {
+                            Log.i(TAG, "GATT disconnected (status=$status)")
+                            bluetoothGatt = null
+                            gatt.close()
+                        }
                         _bleState.value = BleState.Disconnected
-                        gatt.close()
                         retryConnectionAfterDelay()
                     }
                 }
@@ -428,6 +499,7 @@ class BleManager(private val context: Context) {
             writeNextDescriptor(gatt)
 
             val deviceName = gatt.device.name ?: "ESP32"
+            resetReconnectBackoff()
             _bleState.value = BleState.Connected(gatt.device.address, deviceName)
         }
 
@@ -502,9 +574,11 @@ class BleManager(private val context: Context) {
 
             Log.d(TAG, "Alert: $prediction ($fallProb) seq=$sequence")
 
-            if (prediction == "fall" && fallProb >= 0.40f) {
+            if (prediction == "fall") {
                 Log.w(TAG, "⚠️ FALL DETECTED! prob=$fallProb")
-                _fallDetected.tryEmit(FallStatus(sequence, timestampSec, prediction, statusCode, fallProb, nonFallProb))
+                val fall = FallStatus(sequence, timestampSec, prediction, statusCode, fallProb, nonFallProb)
+                _fallDetected.tryEmit(fall)
+                saveFallEvent(fall)
                 
                 // Trigger both vibration and sound
                 vibrateDevice() 
@@ -512,6 +586,24 @@ class BleManager(private val context: Context) {
             }
         } catch (e: Exception) {
             Log.e(TAG, "parseAlertPayload error: ${e.message}")
+        }
+    }
+
+    private fun saveFallEvent(fall: FallStatus) {
+        val prefs = context.getSharedPreferences("aifd_prefs", Context.MODE_PRIVATE)
+        val username = prefs.getString("username", "") ?: ""
+        if (username == "000") return // Don't save for demo account
+
+        val eventsJson = prefs.getString("fall_events_json", "[]") ?: "[]"
+        // Simple CSV-like storage if we don't have Gson, but let's just use a simple string for now
+        // or a pipe-separated list of values.
+        val newEvent = "${fall.timestampSec}|${fall.prediction}|${fall.fallProb}"
+        val updatedEvents = if (eventsJson == "[]") newEvent else "$eventsJson#$newEvent"
+        
+        prefs.edit {
+            putString("fall_events_json", updatedEvents)
+            // Also update last alert info
+            putLong("last_fall_timestamp", fall.timestampSec)
         }
     }
 
@@ -544,10 +636,35 @@ class BleManager(private val context: Context) {
                         spo2 = latestSPO2,
                         timestamp = System.currentTimeMillis()
                     )
+                    saveSensorData(latestHR, latestSPO2)
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "parseVitalsPayload error: ${e.message}")
+        }
+    }
+
+    private fun saveSensorData(hr: Int, spo2: Int) {
+        val prefs = context.getSharedPreferences("aifd_prefs", Context.MODE_PRIVATE)
+        val username = prefs.getString("username", "") ?: ""
+        if (username == "000") return // Don't save for demo account
+
+        prefs.edit {
+            if (hr > 0) putInt("last_heart_rate", hr)
+            if (spo2 > 0) putInt("last_spo2", spo2)
+            putLong("last_timestamp", System.currentTimeMillis())
+            
+            // Update history strings (keep last 24 points)
+            if (hr > 0) {
+                val hrHistory = (prefs.getString("hr_history", "") ?: "").split(",").filter { it.isNotEmpty() }
+                val newHrHistory = (hrHistory.takeLast(23) + hr.toString()).joinToString(",")
+                putString("hr_history", newHrHistory)
+            }
+            if (spo2 > 0) {
+                val spo2History = (prefs.getString("spo2_history", "") ?: "").split(",").filter { it.isNotEmpty() }
+                val newSpo2History = (spo2History.takeLast(23) + spo2.toString()).joinToString(",")
+                putString("spo2_history", newSpo2History)
+            }
         }
     }
 

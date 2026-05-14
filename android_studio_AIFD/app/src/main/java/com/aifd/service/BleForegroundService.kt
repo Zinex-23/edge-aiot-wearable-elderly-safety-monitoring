@@ -64,6 +64,7 @@ class BleForegroundService : Service() {
 
         const val WAKELOCK_TIMEOUT_MS = 60_000L // 60s max screen wake
         const val COUNTDOWN_DURATION_MS = 15_000L // 15s before auto-call
+        const val DISCONNECT_NOTIFICATION_ID = 1003
 
         /** Convenience to start the service from any context. */
         fun start(context: Context) {
@@ -143,13 +144,20 @@ class BleForegroundService : Service() {
 
         // Observe BLE state
         serviceScope.launch {
+            var wasConnected = false
             bleManager.bleState.collect { state ->
                 when (state) {
                     is BleManager.BleState.Connected -> {
+                        wasConnected = true
                         updateNotification(connected = true, deviceName = state.deviceName)
                         broadcastConnectionState(connected = true, deviceName = state.deviceName)
                     }
                     is BleManager.BleState.Disconnected, is BleManager.BleState.Error -> {
+                        // Only notify if we were previously connected (avoids alert on first launch)
+                        if (wasConnected) {
+                            wasConnected = false
+                            showDisconnectNotification()
+                        }
                         updateNotification(connected = false, deviceName = null)
                         broadcastConnectionState(connected = false, deviceName = null)
                     }
@@ -166,14 +174,15 @@ class BleForegroundService : Service() {
             }
         }
 
-        // Periodic auto-reconnect watcher (every 30s)
+        // Periodic safety-net reconnect (every 60s) — BleManager handles short-term backoff;
+        // this catches the case where there is no bonded device yet or after long idle periods.
         autoReconnectJob = serviceScope.launch {
             while (true) {
+                delay(60_000)
                 if (bleManager.bleState.value !is BleManager.BleState.Connected) {
                     Log.d(TAG, "Periodic connection check: Not connected. Retrying…")
                     bleManager.autoConnectBondedEsp32()
                 }
-                delay(30_000)
             }
         }
 
@@ -417,6 +426,26 @@ class BleForegroundService : Service() {
     private fun dismissFallAlertNotification() {
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         nm.cancel(FALL_ALERT_NOTIFICATION_ID)
+    }
+
+    private fun showDisconnectNotification() {
+        val pendingIntent = PendingIntent.getActivity(
+            this, 4,
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setContentTitle("Mất kết nối thiết bị")
+            .setContentText("Vòng đeo tay đã ngắt kết nối. Kiểm tra lại thiết bị.")
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .build()
+        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(DISCONNECT_NOTIFICATION_ID, notification)
     }
 
     private fun updateNotification(connected: Boolean, deviceName: String?) {

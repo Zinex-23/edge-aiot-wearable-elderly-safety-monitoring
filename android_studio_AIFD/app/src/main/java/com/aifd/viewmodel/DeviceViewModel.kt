@@ -114,6 +114,14 @@ class DeviceViewModel(application: Application) : AndroidViewModel(application) 
                             signalStrength = -60,
                             connectionStatus = ConnectionStatus.CONNECTED
                         )
+                        // Persist MAC + name so autoConnectBondedEsp32 can find device by MAC
+                        // even when device.name returns null on next app start
+                        getApplication<Application>()
+                            .getSharedPreferences("aifd_prefs", Context.MODE_PRIVATE)
+                            .edit()
+                            .putString("device_mac", state.deviceAddress)
+                            .putString("device_name", state.deviceName)
+                            .apply()
                         _uiState.update {
                             it.copy(
                                 device = newDevice,

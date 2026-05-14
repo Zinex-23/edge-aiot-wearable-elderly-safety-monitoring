@@ -1,6 +1,8 @@
 package com.aifd
 
 import android.Manifest
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.Intent
 import android.os.Build
@@ -136,6 +138,20 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            // Prompt user to enable Bluetooth if it is currently off
+            val enableBtLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.StartActivityForResult()
+            ) { /* result handled by BleForegroundService BT receiver */ }
+
+            LaunchedEffect(Unit) {
+                val btManager = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+                if (btManager?.adapter?.isEnabled == false) {
+                    Log.i("MainActivity", "Bluetooth is OFF — requesting user to enable")
+                    @Suppress("DEPRECATION")
+                    enableBtLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+                }
+            }
+
             LaunchedEffect(Unit) {
                 val permissions = mutableListOf(
                     Manifest.permission.CALL_PHONE,
@@ -209,9 +225,9 @@ class MainActivity : ComponentActivity() {
                                         putString("device_name", "ESP32-S3 Wearable")
                                         putString("device_mac", "AA:BB:CC:DD:EE:FF")
                                     }
-                                } else if (name == "000") {
-                                    // If 000 logs in but DEMO_MODE is off, clear everything and act like a normal user
-                                    userProfile = UserProfile(username = "000")
+                                } else if (name == "000" || name == "dien572") {
+                                    // For real user (or 000 with DEMO_MODE=off), clear everything and act like a normal user
+                                    userProfile = UserProfile(username = name)
                                     selectedRole = null
                                     prefs.edit {
                                         remove("user_role")
@@ -222,6 +238,16 @@ class MainActivity : ComponentActivity() {
                                         remove("caregiver_phone")
                                         remove("device_name")
                                         remove("device_mac")
+                                        
+                                        // Clear any stored sensor data for a clean slate
+                                        remove("last_heart_rate")
+                                        remove("last_spo2")
+                                        remove("last_vital_timestamp")
+                                        remove("hr_history")
+                                        remove("spo2_history")
+                                        remove("monitoring_hr_live")
+                                        remove("monitoring_spo2_live")
+                                        remove("fall_events_json")
                                     }
                                 }
                                 prefs.edit(commit = true) {

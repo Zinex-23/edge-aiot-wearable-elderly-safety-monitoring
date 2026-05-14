@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhoneIphone
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.AlertDialog
@@ -74,13 +75,15 @@ fun SettingsScreen(
     onNavigateToEmergencyContacts: () -> Unit = {},
     onNavigateToNotifications: () -> Unit = {},
     onNavigateToAccount: () -> Unit = {},
-    onLogout: () -> Unit = {}
+    onLogout: () -> Unit = {},
+    onClearData: () -> Unit = {}
 ) {
     val strings = AppLocalizations.strings
     var showLogoutDialog by remember { mutableStateOf(false) }
     var showThemeDialog by remember { mutableStateOf(false) }
     var showLanguageDialog by remember { mutableStateOf(false) }
     var showRoleDialog by remember { mutableStateOf(false) }
+    var showClearDataDialog by remember { mutableStateOf(false) }
 
     val themeLabel = when (themeMode) {
         AppThemeMode.LIGHT -> strings.light
@@ -140,6 +143,20 @@ fun SettingsScreen(
         }
 
         OutlinedButton(
+            onClick = { showClearDataDialog = true },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            colors = ButtonDefaults.outlinedButtonColors(
+                contentColor = MaterialTheme.colorScheme.error
+            )
+        ) {
+            Icon(Icons.Default.Delete, contentDescription = null,
+                modifier = Modifier.padding(end = 8.dp))
+            Text(strings.clearData, fontWeight = FontWeight.SemiBold)
+        }
+
+        OutlinedButton(
             onClick = { showLogoutDialog = true },
             modifier = Modifier
                 .fillMaxWidth()
@@ -196,6 +213,28 @@ fun SettingsScreen(
             ),
             selected = roleLabel,
             onDismiss = { showRoleDialog = false }
+        )
+    }
+
+    if (showClearDataDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearDataDialog = false },
+            title = { Text(strings.clearDataTitle) },
+            text  = { Text(strings.clearDataMessage) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showClearDataDialog = false
+                        onClearData()
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) { Text(strings.clearDataConfirm) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearDataDialog = false }) { Text(strings.cancel) }
+            }
         )
     }
 

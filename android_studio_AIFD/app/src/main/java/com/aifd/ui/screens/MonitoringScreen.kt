@@ -228,90 +228,131 @@ private fun HeartRateContent(
         }
     }
 
-    // Chart
-    if (uiState.timeRange != TimeRange.LIVE) {
+    // Chart — only for 1h and 24h, not LIVE
+    if (uiState.timeRange != TimeRange.LIVE && uiState.chartData.filter { it > 0 }.isNotEmpty()) {
         ElevatedCard(shape = RoundedCornerShape(16.dp)) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(strings.heartRateTrend, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                }
+                Text(
+                    text = strings.heartRateTrend,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
                 Spacer(Modifier.height(8.dp))
                 LineChart(
-                    data = uiState.chartData,
+                    data      = uiState.chartData,
                     lineColor = MaterialTheme.colorScheme.error,
-                    fillColor = MaterialTheme.colorScheme.error.copy(alpha = 0.1f)
+                    fillColor = MaterialTheme.colorScheme.error.copy(alpha = 0.1f),
+                    timeRange = uiState.timeRange,
+                    unit      = "bpm"
                 )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    val startLabel = when (uiState.timeRange) {
-                        TimeRange.LIVE -> "20s"
-                        TimeRange.ONE_HOUR -> "1h"
-                        TimeRange.TWENTY_FOUR_HOURS -> "24h"
-                    }
-                    Text(startLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(strings.now, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
             }
         }
     }
 
-    if (uiState.timeRange != TimeRange.LIVE) {
+    if (uiState.timeRange != TimeRange.LIVE && uiState.chartData.filter { it > 0 }.isNotEmpty()) {
         StatsRow(stats)
     }
 
-    // Info card for Heart Rate
-    ElevatedCard(
-        shape = RoundedCornerShape(24.dp),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Box(
-            modifier = Modifier
-                .background(
-                    Brush.linearGradient(
-                        colors = listOf(
-                            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.8f),
-                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+    // Info card: show connect prompt when no data, otherwise health info
+    if (!uiState.isConnected || uiState.healthData == null || uiState.healthData.heartRate == 0) {
+        ElevatedCard(
+            shape = RoundedCornerShape(24.dp),
+            elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Box(
+                modifier = Modifier
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(
+                                MaterialTheme.colorScheme.surfaceVariant,
+                                MaterialTheme.colorScheme.surface
+                            )
                         )
                     )
-                )
-                .padding(16.dp)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    .padding(16.dp)
             ) {
-                Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.1f),
-                    modifier = Modifier.size(36.dp)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Info,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(8.dp)
-                    )
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Watch,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(8.dp)
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = strings.noDeviceConnected,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = strings.connectDeviceToView,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = androidx.compose.ui.unit.TextUnit.Unspecified
+                        )
+                    }
                 }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = strings.normalHeartRateRange,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onErrorContainer
+            }
+        }
+    } else {
+        ElevatedCard(
+            shape = RoundedCornerShape(24.dp),
+            elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Box(
+                modifier = Modifier
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(
+                                MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.8f),
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                            )
+                        )
                     )
-                    Text(
-                        text = strings.heartRateWarning,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        lineHeight = androidx.compose.ui.unit.TextUnit.Unspecified
-                    )
+                    .padding(16.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.error.copy(alpha = 0.1f),
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(8.dp)
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = strings.normalHeartRateRange,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                        Text(
+                            text = strings.heartRateWarning,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = androidx.compose.ui.unit.TextUnit.Unspecified
+                        )
+                    }
                 }
             }
         }
@@ -358,89 +399,130 @@ private fun SpO2Content(
         }
     }
 
-    if (uiState.timeRange != TimeRange.LIVE) {
+    if (uiState.timeRange != TimeRange.LIVE && uiState.chartData.filter { it > 0 }.isNotEmpty()) {
         ElevatedCard(shape = RoundedCornerShape(16.dp)) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(strings.spo2Trend, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                }
+                Text(
+                    text = strings.spo2Trend,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
                 Spacer(Modifier.height(8.dp))
                 LineChart(
-                    data = uiState.chartData,
+                    data      = uiState.chartData,
                     lineColor = MaterialTheme.colorScheme.primary,
-                    fillColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
+                    fillColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
+                    timeRange = uiState.timeRange,
+                    unit      = "%"
                 )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    val startLabel = when (uiState.timeRange) {
-                        TimeRange.LIVE -> "20s"
-                        TimeRange.ONE_HOUR -> "1h"
-                        TimeRange.TWENTY_FOUR_HOURS -> "24h"
-                    }
-                    Text(startLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(strings.now, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
             }
         }
     }
 
-    if (uiState.timeRange != TimeRange.LIVE) {
+    if (uiState.timeRange != TimeRange.LIVE && uiState.chartData.filter { it > 0 }.isNotEmpty()) {
         StatsRow(stats, "%")
     }
 
-    // Info card
-    ElevatedCard(
-        shape = RoundedCornerShape(24.dp),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Box(
-            modifier = Modifier
-                .background(
-                    Brush.linearGradient(
-                        colors = listOf(
-                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.8f),
-                            MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f)
+    // Info card: show connect prompt when no data, otherwise health info
+    if (!uiState.isConnected || uiState.healthData == null || uiState.healthData.spO2 == 0) {
+        ElevatedCard(
+            shape = RoundedCornerShape(24.dp),
+            elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Box(
+                modifier = Modifier
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(
+                                MaterialTheme.colorScheme.surfaceVariant,
+                                MaterialTheme.colorScheme.surface
+                            )
                         )
                     )
-                )
-                .padding(16.dp)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    .padding(16.dp)
             ) {
-                Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
-                    modifier = Modifier.size(36.dp)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Info,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(8.dp)
-                    )
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Watch,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(8.dp)
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = strings.noDeviceConnected,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = strings.connectDeviceToView,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = androidx.compose.ui.unit.TextUnit.Unspecified
+                        )
+                    }
                 }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = strings.normalSpo2Range,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
+            }
+        }
+    } else {
+        ElevatedCard(
+            shape = RoundedCornerShape(24.dp),
+            elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Box(
+                modifier = Modifier
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(
+                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.8f),
+                                MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f)
+                            )
+                        )
                     )
-                    Text(
-                        text = strings.lowSpo2Warning,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        lineHeight = androidx.compose.ui.unit.TextUnit.Unspecified
-                    )
+                    .padding(16.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(8.dp)
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = strings.normalSpo2Range,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Text(
+                            text = strings.lowSpo2Warning,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = androidx.compose.ui.unit.TextUnit.Unspecified
+                        )
+                    }
                 }
             }
         }

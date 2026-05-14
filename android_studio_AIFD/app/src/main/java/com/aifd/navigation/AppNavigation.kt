@@ -153,6 +153,12 @@ fun AppNavigation(
     val deviceViewModel: DeviceViewModel = viewModel(factory = factory)
     val alertViewModel: AlertViewModel = viewModel(factory = factory)
 
+    // Reset ViewModel state when the logged-in user changes (e.g. switching accounts)
+    LaunchedEffect(username) {
+        homeViewModel.resetForUser(username)
+        monitoringViewModel.resetForUser(username)
+    }
+
     // Sync device connection state from DeviceViewModel -> HomeViewModel
     LaunchedEffect(deviceViewModel) {
         deviceViewModel.uiState.collect { devState ->
@@ -294,7 +300,8 @@ fun AppNavigation(
                     onNavigateToEmergencyContacts = { /* TODO */ },
                     onNavigateToNotifications = { /* TODO */ },
                     onNavigateToAccount = { navController.navigate(Screen.Profile.route) },
-                    onLogout = onLogout
+                    onLogout = onLogout,
+                    onClearData = { monitoringViewModel.clearVitalsData() }
                 )
             }
 
