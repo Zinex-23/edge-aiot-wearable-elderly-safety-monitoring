@@ -21,6 +21,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.aifd.data.*
+import com.aifd.ui.components.aifd.AifdEmptyState
 import com.aifd.ui.localization.AppLocalizations
 import com.aifd.ui.theme.AIFDTheme
 import com.aifd.ui.theme.AIFDThemeExt
@@ -64,36 +65,12 @@ fun HistoryScreen(
             }
 
             if (filteredEvents.isEmpty()) {
-                // Empty state
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 64.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(64.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Default.FilterList,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(32.dp)
-                        )
-                    }
-                    Spacer(Modifier.height(16.dp))
-                    Text(strings.noEventsFound, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
-                    Text(
-                        if (filter == "all") strings.alertHistoryEmpty
-                        else strings.noFilteredEvents(filter),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                AifdEmptyState(
+                    icon = if (filter == "all") Icons.Default.Notifications else Icons.Default.FilterList,
+                    title = if (filter == "all") strings.noEventsTitle else strings.noEventsFound,
+                    subtitle = if (filter == "all") strings.noEventsSubtitle
+                              else strings.noFilteredEvents(filter)
+                )
             } else {
                 filteredEvents.forEach { event ->
                     EventListItem(event = event, onClick = { onEventClick(event.id) })

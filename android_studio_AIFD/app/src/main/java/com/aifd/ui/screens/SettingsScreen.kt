@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhoneIphone
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.AlertDialog
@@ -55,6 +56,8 @@ import com.aifd.data.DeviceInfo
 import com.aifd.data.MockDataProvider
 import com.aifd.data.UserRole
 import com.aifd.ui.components.SectionHeader
+import com.aifd.ui.components.aifd.AifdSectionCard
+import com.aifd.ui.components.aifd.AifdSettingsRow
 import com.aifd.ui.localization.AppLanguage
 import com.aifd.ui.localization.AppLocalizations
 import com.aifd.ui.theme.AIFDTheme
@@ -104,68 +107,53 @@ fun SettingsScreen(
             .navigationBarsPadding(),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        ElevatedCard {
-            Column(modifier = Modifier.padding(vertical = 4.dp)) {
-                SectionHeader(strings.appearance, Modifier.padding(horizontal = 16.dp))
-                SettingsItem(
-                    icon = Icons.Default.Palette,
-                    label = strings.theme,
-                    value = themeLabel,
-                    onClick = { showThemeDialog = true }
-                )
-                SettingsItem(
-                    icon = Icons.Default.Translate,
-                    label = strings.language,
-                    value = languageLabel,
-                    onClick = { showLanguageDialog = true }
-                )
-                SettingsItem(
-                    icon = Icons.Default.Person,
-                    label = strings.role,
-                    value = roleLabel,
-                    onClick = { showRoleDialog = true }
-                )
-            }
-        }
-
-
-
-        ElevatedCard {
-            Column(modifier = Modifier.padding(vertical = 4.dp)) {
-                SectionHeader(strings.account, Modifier.padding(horizontal = 16.dp))
-                SettingsItem(
-                    icon = Icons.Default.Person,
-                    label = strings.profile,
-                    value = strings.viewProfile,
-                    onClick = onNavigateToAccount
-                )
-            }
-        }
-
-        OutlinedButton(
-            onClick = { showClearDataDialog = true },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp),
-            colors = ButtonDefaults.outlinedButtonColors(
-                contentColor = MaterialTheme.colorScheme.error
+        AifdSectionCard(title = strings.appearance) {
+            AifdSettingsRow(
+                icon = Icons.Default.Palette,
+                title = strings.theme,
+                subtitle = themeLabel,
+                onClick = { showThemeDialog = true }
             )
-        ) {
-            Icon(Icons.Default.Delete, contentDescription = null,
-                modifier = Modifier.padding(end = 8.dp))
-            Text(strings.clearData, fontWeight = FontWeight.SemiBold)
+            AifdSettingsRow(
+                icon = Icons.Default.Translate,
+                title = strings.language,
+                subtitle = languageLabel,
+                onClick = { showLanguageDialog = true }
+            )
+            AifdSettingsRow(
+                icon = Icons.Default.Person,
+                title = strings.role,
+                subtitle = roleLabel,
+                onClick = { showRoleDialog = true }
+            )
         }
 
-        OutlinedButton(
-            onClick = { showLogoutDialog = true },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp),
-            colors = ButtonDefaults.outlinedButtonColors(
-                contentColor = MaterialTheme.colorScheme.error
+        AifdSectionCard(title = strings.account) {
+            AifdSettingsRow(
+                icon = Icons.Default.Person,
+                title = strings.profile,
+                subtitle = strings.viewProfile,
+                onClick = onNavigateToAccount
             )
-        ) {
-            Text(strings.logout, fontWeight = FontWeight.SemiBold)
+        }
+
+        AifdSectionCard(title = strings.dangerZone) {
+            AifdSettingsRow(
+                icon = Icons.Default.Delete,
+                title = strings.clearData,
+                subtitle = strings.clearDataMessage.take(40) + "…",
+                onClick = { showClearDataDialog = true },
+                iconTint = MaterialTheme.colorScheme.error,
+                iconBackground = MaterialTheme.colorScheme.errorContainer
+            )
+            AifdSettingsRow(
+                icon = Icons.AutoMirrored.Filled.Logout,
+                title = strings.logout,
+                subtitle = strings.logoutMessage.take(40) + "…",
+                onClick = { showLogoutDialog = true },
+                iconTint = MaterialTheme.colorScheme.error,
+                iconBackground = MaterialTheme.colorScheme.errorContainer
+            )
         }
 
         Text(
