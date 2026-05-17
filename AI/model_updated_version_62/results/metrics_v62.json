@@ -1,0 +1,22 @@
+{
+  "version": 62,
+  "accuracy": 0.9048507462686567,
+  "precision": 0.858085808580858,
+  "recall": 0.9701492537313433,
+  "f1": 0.9106830122591943,
+  "false_alarm_rate": 0.16044776119402984,
+  "miss_rate": 0.029850746268656716,
+  "best_threshold": 0.49000000000000005,
+  "config": {
+    "filters": "[32, 48, 64, 96]",
+    "kernels": "[5, 5, 5, 5]",
+    "dense": "32",
+    "lr": "0.0003",
+    "dropout": "0.4",
+    "l2": "0.0001",
+    "batch": "32",
+    "epochs": "200",
+    "cw": "{0: 1.0, 1: 1.2}",
+    "note": "V54+V59 combo: D32 + batch=32 (best F1 + best FAR combo)"
+  }
+}

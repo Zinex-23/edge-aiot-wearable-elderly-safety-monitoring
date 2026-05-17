@@ -1,0 +1,22 @@
+{
+  "version": 53,
+  "accuracy": 0.9048507462686567,
+  "precision": 0.8534201954397395,
+  "recall": 0.9776119402985075,
+  "f1": 0.9113043478260869,
+  "false_alarm_rate": 0.16791044776119404,
+  "miss_rate": 0.022388059701492536,
+  "best_threshold": 0.43000000000000005,
+  "config": {
+    "filters": "[32, 48, 64, 96]",
+    "kernels": "[7, 7, 7, 7]",
+    "dense": "20",
+    "lr": "0.0003",
+    "dropout": "0.4",
+    "l2": "0.0001",
+    "batch": "64",
+    "epochs": "200",
+    "class_weight": "{0: 1.0, 1: 1.2}",
+    "note": "K7 kernels \u2014 larger temporal receptive field"
+  }
+}

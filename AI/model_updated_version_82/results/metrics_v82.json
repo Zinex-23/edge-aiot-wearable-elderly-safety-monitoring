@@ -1,0 +1,27 @@
+{
+  "version": 82,
+  "accuracy": 0.9216417910447762,
+  "precision": 0.8717105263157895,
+  "recall": 0.9888059701492538,
+  "f1": 0.9265734265734266,
+  "false_alarm_rate": 0.1455223880597015,
+  "miss_rate": 0.011194029850746268,
+  "best_threshold": 0.28,
+  "stopped_epoch": 46,
+  "config": {
+    "filters": "[32, 64, 64, 96]",
+    "kernels": "[3, 3, 3, 3]",
+    "dense": "32",
+    "lr": "0.0003",
+    "dropout": "0.4",
+    "l2": "0.0003",
+    "batch": "32",
+    "epochs": "300",
+    "cw": "{0: 1.0, 1: 1.2}",
+    "aug_sigma": "0.0",
+    "es_patience": "20",
+    "lr_factor": "0.1",
+    "lr_patience": "5",
+    "note": "patience=20 + ReduceLR(factor=0.1, patience=5) \u2014 aggressive LR"
+  }
+}

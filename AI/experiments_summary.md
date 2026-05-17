@@ -51,3 +51,63 @@ Dưới đây là các mô hình "Winner" được phân loại theo từng mụ
 - **Tiến trình**: Đã hoàn thành 100% (V1 -> V50).
 - **Phân tích tham số**: Sự chuyển dịch từ **Kernel 3 sang Kernel 5** (từ V37) và việc tăng số lớp Conv từ 2 lên 4 (từ V21) là chìa khóa để đạt được sự cân bằng giữa độ nhạy và báo động giả trong khi vẫn giữ kích thước dưới 50KB.
 - **Khuyến nghị**: Sử dụng **V50** vì nó tận dụng tốt nhất kiến trúc Kernel 5 và bộ lọc [32,48,64,96] để đạt hiệu năng toàn diện trên 90%.
+
+## V51-V60 Results
+
+| Version | Note | Accuracy | Recall | F1 | FAR | Size |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **V51** | V50 base, cw=1:1, FAR-penalized scoring | 83.21% | 72.76% | 81.25% | 6.34% | 76.64 KB |
+| **V52** | V50 base, cw=1:1.5, Recall-maximizing sc | 92.16% | 97.39% | 92.55% | 13.06% | 77.06 KB |
+| **V53** | K7 kernels — larger temporal receptive f | 90.49% | 97.76% | 91.13% | 16.79% | 98.52 KB |
+| **V54** | V50 base + Dense=32 (more classification | 92.72% | 97.76% | 93.07% | 12.31% | 78.68 KB |
+| **V55** | Wider filters [48,64,80,96] — more featu | 91.23% | 96.64% | 91.68% | 14.18% | 104.00 KB |
+| **V56** | V50 base + Dropout=0.5 (more regularizat | 90.86% | 89.55% | 90.74% | 7.84% | 77.23 KB |
+| **V57** | V50 base + L2=5e-4 (stronger weight deca | 91.04% | 97.01% | 91.55% | 14.93% | 77.23 KB |
+| **V58** | V50 base + LR=1e-4 (finer convergence) | 91.23% | 93.66% | 91.44% | 11.19% | 77.23 KB |
+| **V59** | V50 base + BatchSize=32 (better generali | 92.16% | 92.54% | 92.19% | 8.21% | 77.23 KB |
+| **V60** | Mixed kernels K3/K5/K5/K3 — multi-scale  | 88.99% | 89.93% | 89.09% | 11.94% | 64.85 KB |
+
+## V61-V70 Results
+
+| Version | Note | Accuracy | Recall | F1 | FAR | Size |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **V61** | V22 arch [16,32,48,64]/K5 + D32 + batch=32 | 86.94% | 90.30% | 87.36% | 16.42% | 46.95 KB |
+| **V62** | V54+V59 combo: D32 + batch=32 (best F1 + best | 90.49% | 97.01% | 91.07% | 16.04% | 78.52 KB |
+| **V63** | V56+V59 combo: dropout=0.5 + batch=32 (FAR re | 89.55% | 92.16% | 89.82% | 13.06% | 77.14 KB |
+| **V64** | V27 arch [32,64,64,96]/K3/D32 + batch=32 | 92.91% | 96.64% | 93.17% | 10.82% | 62.09 KB |
+| **V65** | V37 arch [24,48,64,96]/K5 + D24 + batch=32 | 89.18% | 96.27% | 89.90% | 17.91% | 75.38 KB |
+| **V66** | V22 arch tuned: D24 + dropout=0.45 + batch=32 | 91.79% | 95.52% | 92.09% | 11.94% | 46.81 KB |
+| **V67** | Max regularize: D32 + dropout=0.5 + batch=32  | 88.62% | 96.64% | 89.46% | 19.40% | 78.70 KB |
+| **V68** | V58+V59 combo: LR=1e-4 + batch=32 | 89.74% | 95.90% | 90.33% | 16.42% | 77.23 KB |
+| **V69** | V54+V59+V57 combo: D32 + batch=32 + L2=5e-4 | 90.67% | 97.39% | 91.26% | 16.04% | 78.70 KB |
+| **V70** | 5 conv layers [16,32,48,64,96]/K5 — novel dep | 90.86% | 94.03% | 91.14% | 12.31% | 83.25 KB |
+
+## V71-V80 Results
+
+| Version | Note | Accuracy | Recall | F1 | FAR | Size |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **V71** | V64 + LR=1e-4 (finer convergence on best arch) | 90.11% | 93.66% | 90.45% | 13.43% | 61.51 KB |
+| **V72** | V64 + batch=16 (smaller batch → better generalizat | 89.18% | 97.01% | 89.97% | 18.66% | 61.93 KB |
+| **V73** | V23 arch [32,64,96,96]/K3 + D32+batch=32 (V23 had  | 90.67% | 91.04% | 90.71% | 9.70% | 77.88 KB |
+| **V74** | V64 arch switched to K5 + D32 + batch=32 | 90.86% | 96.64% | 91.36% | 14.93% | 86.46 KB |
+| **V75** | V64 + dropout=0.3 (less regularization, more capac | 89.93% | 95.90% | 90.49% | 16.04% | 62.09 KB |
+| **V76** | V64 + cw=1.1 + FAR penalty×2.5 (less recall bias → | 90.11% | 92.16% | 90.31% | 11.94% | 62.10 KB |
+| **V77** | V54+V59+V58: [32,48,64,96]/K5/D32 + batch=32 + LR= | 91.23% | 92.16% | 91.31% | 9.70% | 78.70 KB |
+| **V78** | V64 + last filter 96→128 (wider feature extraction | 89.93% | 95.90% | 90.49% | 16.04% | 69.98 KB |
+| **V79** | V64 + Dense=48 (more classification capacity) | 91.42% | 93.28% | 91.58% | 10.45% | 64.05 KB |
+| **V80** | V64 + L2=3e-4 (tuned regularization between 1e-4 a | 93.10% | 97.39% | 93.38% | 11.19% | 62.10 KB |
+
+## V81-V90 Results (Overfitting Fix)
+
+| V | Strategy | Acc | Recall | F1 | FAR | Epoch |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **V81** | patience=10 — user suggestion, baseline test | 91.23% | 92.16% | 91.31% | 9.70% | 30 |
+| **V82** | patience=20 + ReduceLR(factor=0.1, patience=5 | 92.16% | 98.88% | 92.66% | 14.55% | 46 |
+| **V83** | Dropout=0.5 + L2=5e-4 — strong regularization | 90.30% | 95.90% | 90.81% | 15.30% | 66 |
+| **V84** | Gaussian noise aug σ=0.05 — fix overfitting a | 93.10% | 98.51% | 93.45% | 12.31% | 78 |
+| **V85** | Cosine decay LR — smooth convergence, no osci | 89.74% | 97.76% | 90.50% | 18.28% | 43 |
+| **V86** | aug σ=0.05 + L2=5e-4 + LR aggressive — two st | 91.79% | 98.13% | 92.28% | 14.55% | 65 |
+| **V87** | patience=10 + aug σ=0.05 — user idea + root f | 88.43% | 94.40% | 89.08% | 17.54% | 20 |
+| **V88** | Dropout=0.45 + aggressive LR(factor=0.1, p=5) | 91.42% | 96.64% | 91.84% | 13.81% | 31 |
+| **V89** | Gaussian noise aug σ=0.10 — stronger augmenta | 90.49% | 94.78% | 90.88% | 13.81% | 57 |
+| **V90** | BEST COMBO: drop=0.45+L2=5e-4+aug0.05+LR_aggr | 89.18% | 95.15% | 89.79% | 16.79% | 93 |
