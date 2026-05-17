@@ -40,6 +40,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.aifd.data.*
+import com.aifd.ui.components.aifd.AifdFloatingBottomBar
+import com.aifd.ui.components.aifd.AifdNavSpec
 import com.aifd.ui.localization.AppLanguage
 import com.aifd.ui.localization.AppLocalizations
 import com.aifd.ui.screens.*
@@ -170,30 +172,40 @@ fun AppNavigation(
     val prefs = remember { context.getSharedPreferences("aifd_prefs", Context.MODE_PRIVATE) }
 
 
-    val bottomNavItems = remember(selectedRole, language) {
+    val aifdNavItems = remember(language) {
         listOf(
-            BottomNavItem(Screen.Home, { strings.home }, Icons.Filled.Home, Icons.Outlined.Home),
-            BottomNavItem(Screen.Monitoring, { strings.health }, Icons.Filled.Favorite, Icons.Outlined.FavoriteBorder),
-            BottomNavItem(Screen.Alerts, { strings.alerts }, Icons.Filled.Notifications, Icons.Outlined.Notifications),
-            BottomNavItem(Screen.Settings, { strings.settings }, Icons.Filled.Settings, Icons.Outlined.Settings)
+            AifdNavSpec(Screen.Home.route,       strings.home,     Icons.Filled.Home,          Icons.Outlined.Home),
+            AifdNavSpec(Screen.Monitoring.route, strings.health,   Icons.Filled.Favorite,      Icons.Outlined.FavoriteBorder),
+            AifdNavSpec(Screen.Alerts.route,     strings.alerts,   Icons.Filled.Notifications, Icons.Outlined.Notifications),
+            AifdNavSpec(Screen.Settings.route,   strings.settings, Icons.Filled.Settings,      Icons.Outlined.Settings)
         )
     }
 
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
 
-    // Screens where bottom nav should be hidden
+    // Screens where bottom nav should be hidden — per UI upgrade spec
     val hideBottomNav = currentRoute in listOf(
         Screen.FallAlert.route,
         Screen.DevicePairing.route,
         Screen.DeviceDetail.route,
-        Screen.EventDetail.route
+        Screen.EventDetail.route,
+        Screen.Profile.route
     )
 
     Scaffold(
         bottomBar = {
             if (!hideBottomNav) {
-                BottomNavigationBar(navController = navController, items = bottomNavItems)
+                AifdFloatingBottomBar(
+                    items = aifdNavItems,
+                    currentRoute = currentRoute,
+                    onItemClick = { spec ->
+                        navController.navigate(spec.route) {
+                            popUpTo(Screen.Home.route) { inclusive = false }
+                            launchSingleTop = true
+                        }
+                    }
+                )
             }
         }
     ) { innerPadding ->

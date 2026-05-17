@@ -1,933 +1,659 @@
 #include <Arduino.h>
-#include <NimBLEDevice.h>
 #include <Wire.h>
 #include <math.h>
 
-#include "../../esp32-S3-build/include/fall_detection_model.h"
+#include "fall_detection_v84.h"
 #include "tensorflow/lite/micro/all_ops_resolver.h"
 #include "tensorflow/lite/micro/micro_error_reporter.h"
 #include "tensorflow/lite/micro/micro_interpreter.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 
 // =====================================================
-// PINS
+// PIN CONFIG
 // =====================================================
-static const int I2C_SDA_PIN = 8;
-static const int I2C_SCL_PIN = 9;
-static const int BUTTON_PIN = 10;
-static const int LED_PIN = 48;
+static const int PIN_LED_GREEN  = 4;
+static const int PIN_LED_YELLOW = 5;
+static const int PIN_LED_RED    = 6;
+static const int PIN_BUZZER     = 7;
+static const int PIN_BUTTON     = 10;
+static const int PIN_I2C_SDA    = 8;
+static const int PIN_I2C_SCL    = 9;
 
 // =====================================================
-// BLE
+// BUZZER CONFIG
+// 2300 Hz = tần số cộng hưởng của Loa Buzzer 5V (theo datasheet).
+// Đổi sang digitalWrite(PIN_BUZZER, HIGH/LOW) nếu là active buzzer.
 // =====================================================
-static const char *BLE_DEVICE_NAME = "ESP32-fall-detection-BLE";
-static const char *BLE_SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
-static const char *BLE_STATUS_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
-static const char *BLE_VITALS_CHAR_UUID = "7b809f11-63f0-4dca-8e4d-2b4e8384e7c1";
-static const char *BLE_CONTROL_CHAR_UUID = "f9b2c417-1d15-4ad4-9b52-b94aa0f76b03";
+static const unsigned int BUZZER_FREQ_HZ = 2300;
+
+// =====================================================
+// TIMING
+// =====================================================
+static const unsigned long DEBOUNCE_MS       = 30;
+static const unsigned long BLINK_INTERVAL_MS = 300;
+static const unsigned long SERIAL_BAUD       = 115200;
 
 // =====================================================
 // BMI160 REGISTERS
 // =====================================================
-static const uint8_t BMI160_ADDR_LOW = 0x68;
-static const uint8_t BMI160_ADDR_HIGH = 0x69;
-static const uint8_t BMI160_CHIP_ID = 0xD1;
+static const uint8_t BMI160_ADDR_LOW   = 0x68;
+static const uint8_t BMI160_ADDR_HIGH  = 0x69;
+static const uint8_t BMI160_CHIP_ID    = 0xD1;
 
-static const uint8_t REG_CHIP_ID = 0x00;
-static const uint8_t REG_GYR_DATA = 0x0C;
-static const uint8_t REG_ACC_DATA = 0x12;
-static const uint8_t REG_ACC_CONF = 0x40;
+static const uint8_t REG_CHIP_ID   = 0x00;
+static const uint8_t REG_GYR_DATA  = 0x0C;
+static const uint8_t REG_ACC_DATA  = 0x12;
+static const uint8_t REG_ACC_CONF  = 0x40;
 static const uint8_t REG_ACC_RANGE = 0x41;
-static const uint8_t REG_GYR_CONF = 0x42;
+static const uint8_t REG_GYR_CONF  = 0x42;
 static const uint8_t REG_GYR_RANGE = 0x43;
-static const uint8_t REG_CMD = 0x7E;
+static const uint8_t REG_CMD       = 0x7E;
 
-static const float ACC_LSB_PER_G = 16384.0f;
-static const float GYR_LSB_PER_DPS = 16.4f;
-
-// =====================================================
-// SAMPLING + MODEL
-// =====================================================
-static const uint32_t SAMPLE_RATE_HZ = 50;
-static const uint32_t SAMPLE_PERIOD_MS = 1000 / SAMPLE_RATE_HZ;
-
-static const int kWindowSize = 100;
-static const int kFeatureCount = 6;
-static const int kInferenceStride = 50;
-static const int kTensorArenaSize = 60 * 1024;
-
-static const float FALL_DECISION_THRESHOLD = 0.40f;
-static const float CANDIDATE_ACC_THRESHOLD = 1.5f;
-static const float CANDIDATE_GYRO_THRESHOLD = 50.0f;
+static const float ACC_LSB_PER_G   = 16384.0f;  // ±2g range
+static const float GYR_LSB_PER_DPS = 16.4f;     // ±2000 dps range
 
 // =====================================================
-// VITALS BATCHING
+// SAMPLING + MODEL CONFIG
 // =====================================================
-static const uint32_t VITALS_SAMPLE_PERIOD_MS = 5000;
-static const uint32_t VITALS_DISPATCH_PERIOD_MS = 25000;
-static const uint8_t VITALS_BATCH_SIZE = 5;
-static const uint8_t INVALID_VITAL_VALUE = 255;
-static const size_t VITALS_QUEUE_CAPACITY = 32;
-static const size_t FALL_QUEUE_CAPACITY = 16;
-static const uint16_t BLE_NOTIFY_SPACING_MS = 30;
-static const uint32_t SIMULATED_UNIX_EPOCH_BASE_UTC = 1776729600UL;  // 2026-04-21 00:00:00 UTC
+static const uint32_t SAMPLE_RATE_HZ   = 50;
+static const uint32_t SAMPLE_PERIOD_MS = 1000 / SAMPLE_RATE_HZ;  // 20 ms
+
+static const int kWindowSize       = 100;   // 2s @ 50Hz
+static const int kFeatureCount     = 6;
+static const int kInferenceStride  = 100;   // inference mỗi 2s
+static const int kTensorArenaSize  = 60 * 1024;
+
+static const float FALL_DECISION_THRESHOLD   = 0.42f;  // V84 optimal threshold
+static const float CANDIDATE_ACC_THRESHOLD   = 7.5f;   // g
+static const float CANDIDATE_GYRO_THRESHOLD  = 240.0f; // dps
+
+// --- Voting: yêu cầu N window liên tiếp đều báo fall ---
+// Thực tế: window ngay sau ngã có fall_prob=0 (người đang nằm im → non-fall là đúng)
+// nên không thể yêu cầu 2 window liên tiếp. 3 lớp lọc trước đã đủ chặt → 1 là đủ.
+static const int   FALL_CONFIRM_COUNT        = 1;
+
+// --- Post-fall stillness check ---
+// Sau impact, người ngã thật thường nằm/ngồi im (acc ≈ 1g, gyro ≈ 0)
+// Kiểm tra 0.5s cuối của window
+static const int   STILLNESS_SAMPLES         = 25;     // 25 mẫu × 20ms = 0.5s
+static const float STILLNESS_ACC_MIN         = 0.6f;   // g — có thể nằm nghiêng
+static const float STILLNESS_ACC_MAX         = 1.7f;   // g
+static const float STILLNESS_GYRO_MAX        = 100.0f; // dps
+
+// --- Impact gyro check ---
+// Ngã thật bắt buộc có rotation mạnh ở đâu đó trong 2s window (xoay người khi ngã).
+// Đặt tay nhẹ vào chỗ hoặc dừng chuyển động thì gyro thấp suốt → loại false positive.
+static const float FALL_IMPACT_GYRO_MIN      = 20.0f;  // dps — peak gyro trong cả window
+
+// --- Pre-activity gate ---
+// Cần 3 window LIÊN TIẾP có acc > 2g HOẶC gyro > 50dps mới bật AI
+static const float  ACTIVITY_ACC_THRESHOLD   = 2.0f;   // g
+static const float  ACTIVITY_GYRO_THRESHOLD  = 50.0f;  // dps
+static const int    ACTIVITY_WINDOW_COUNT    = 3;
 
 // =====================================================
-// BUTTON STATE
+// STATE MACHINE
 // =====================================================
-bool acquisitionEnabled = true;
-bool buttonState = HIGH;
-bool lastButtonReading = HIGH;
-unsigned long lastDebounceTime = 0;
-const unsigned long debounceDelay = 50;
+enum State : uint8_t {
+    STATE_ALL_ON = 0,    // 3 đèn sáng
+    STATE_GREEN,         // chỉ đèn xanh
+    STATE_YELLOW,        // chỉ đèn vàng
+    STATE_RED,           // chỉ đèn đỏ
+    STATE_BLINK_BUZZ,    // 3 đèn nhấp nháy + loa kêu (alarm)
+    STATE_COUNT
+};
+
+static const char *STATE_NAMES[STATE_COUNT] = {
+    "ALL_ON", "GREEN", "YELLOW", "RED", "BLINK_BUZZ"
+};
+
+static State currentState = STATE_ALL_ON;
+
+// Button debounce state
+static int           btnLastReading = HIGH;
+static int           btnStable      = HIGH;
+static unsigned long btnLastChange  = 0;
+
+// Blink state
+static bool          blinkLevel  = true;
+static unsigned long blinkLastMs = 0;
 
 // =====================================================
-// MODEL STATE
-// =====================================================
-namespace {
-const tflite::Model *model = nullptr;
-tflite::ErrorReporter *errorReporter = nullptr;
-tflite::MicroInterpreter *interpreter = nullptr;
-TfLiteTensor *inputTensor = nullptr;
-TfLiteTensor *outputTensor = nullptr;
-uint8_t tensorArena[kTensorArenaSize];
-int outputElementCount = 0;
-}  // namespace
-
-// =====================================================
-// IMU WINDOW
+// BMI160 + MODEL STATE
 // =====================================================
 struct ImuSample {
-  float ax = 0.0f;
-  float ay = 0.0f;
-  float az = 0.0f;
-  float gx = 0.0f;
-  float gy = 0.0f;
-  float gz = 0.0f;
-  uint32_t tsMs = 0;
+    float ax = 0, ay = 0, az = 0;
+    float gx = 0, gy = 0, gz = 0;
+    uint32_t tsMs = 0;
 };
 
-ImuSample imuWindow[kWindowSize];
-int windowHead = 0;
-int windowCount = 0;
-int samplesSinceInference = 0;
+static uint8_t  bmi160Addr  = BMI160_ADDR_LOW;
+static bool     bmiOk       = false;
+static uint32_t lastSampleMs = 0;
 
-uint8_t bmi160Addr = BMI160_ADDR_LOW;
-bool bmiOk = false;
-uint32_t lastSampleMs = 0;
+static ImuSample imuWindow[kWindowSize];
+static int windowHead = 0;
+static int windowCount = 0;
+static int samplesSinceInference = 0;
 
-// =====================================================
-// VITALS STATE
-// =====================================================
-struct VitalSample {
-  uint8_t heartRate = INVALID_VITAL_VALUE;
-  uint8_t spo2 = INVALID_VITAL_VALUE;
-  uint32_t timestampSec = 0;
-};
+namespace {
+const tflite::Model*       model = nullptr;
+tflite::ErrorReporter*     errorReporter = nullptr;
+tflite::MicroInterpreter*  interpreter = nullptr;
+TfLiteTensor*              inputTensor = nullptr;
+TfLiteTensor*              outputTensor = nullptr;
+uint8_t                    tensorArena[kTensorArenaSize];
+int                        outputElementCount = 0;
+bool                       modelOk = false;
+}  // namespace
 
-struct VitalsBatchPacket {
-  uint32_t sequence = 0;
-  uint8_t heartRate[VITALS_BATCH_SIZE] = {INVALID_VITAL_VALUE, INVALID_VITAL_VALUE,
-                                          INVALID_VITAL_VALUE, INVALID_VITAL_VALUE,
-                                          INVALID_VITAL_VALUE};
-  uint8_t spo2[VITALS_BATCH_SIZE] = {INVALID_VITAL_VALUE, INVALID_VITAL_VALUE,
-                                     INVALID_VITAL_VALUE, INVALID_VITAL_VALUE,
-                                     INVALID_VITAL_VALUE};
-  uint32_t timestampSec[VITALS_BATCH_SIZE] = {0, 0, 0, 0, 0};
-};
+// ── Fall detection state machine ──────────────────────────────────────────
+// IDLE          : bình thường, AI gated bởi activityCount
+// FALL_WATCH    : AI phát hiện ngã, đang theo dõi xem có nằm im không
+//                 Tồn tại tối đa FALL_WATCH_WINDOWS window (sau đó về IDLE nếu không im)
+// STILL_TIMING  : đã thấy nằm im, đang đo thời gian
+//                 Nếu đủ FALL_STILL_DURATION_MS → ALARM
+//                 Nếu cử động → về IDLE
+enum FallDetectState : uint8_t { FDS_IDLE, FDS_FALL_WATCH, FDS_STILL_TIMING };
 
-struct FallAlertPacket {
-  uint32_t sequence = 0;
-  uint32_t timestampSec = 0;
-  uint8_t statusCode = 1;
-  float fallProb = 0.0f;
-  float nonFallProb = 0.0f;
-};
+static FallDetectState fallDetectState    = FDS_IDLE;
+static int             fallWatchLeft      = 0;      // số window còn lại trong FALL_WATCH
+static uint32_t        stillnessStartMs   = 0;      // thời điểm bắt đầu nằm im
 
-VitalSample vitalsHistory[VITALS_BATCH_SIZE];
-uint8_t vitalsHistoryHead = 0;
-uint8_t vitalsHistoryCount = 0;
-uint32_t lastVitalsSampleMs = 0;
-uint32_t lastVitalsDispatchMs = 0;
-uint32_t nextVitalsSequence = 1;
-uint32_t nextFallSequence = 1;
+static const int      FALL_WATCH_WINDOWS     = 5;    // 5 window = 10s theo dõi sau ngã
+static const uint32_t FALL_STILL_DURATION_MS = 5000; // 5s nằm im liên tục → ALARM
 
-VitalsBatchPacket vitalsQueue[VITALS_QUEUE_CAPACITY];
-size_t vitalsQueueHead = 0;
-size_t vitalsQueueCount = 0;
-
-FallAlertPacket fallQueue[FALL_QUEUE_CAPACITY];
-size_t fallQueueHead = 0;
-size_t fallQueueCount = 0;
+static int      activityCount         = 0;       // lịch sử hoạt động gần đây [0, ACTIVITY_WINDOW_COUNT]
 
 // =====================================================
-// BLE STATE
+// LED / BUZZER HELPERS
 // =====================================================
-NimBLEServer *bleServer = nullptr;
-NimBLECharacteristic *statusCharacteristic = nullptr;
-NimBLECharacteristic *vitalsCharacteristic = nullptr;
-NimBLECharacteristic *controlCharacteristic = nullptr;
-bool bleClientConnected = false;
-bool bleFlushRequested = false;
-bool bleClientReady = false;
-
-void requestFlushAfterReady() {
-  if (!bleClientConnected) return;
-  if (!bleClientReady) return;
-  bleFlushRequested = true;
+static void setLeds(bool g, bool y, bool r) {
+    digitalWrite(PIN_LED_GREEN,  g ? HIGH : LOW);
+    digitalWrite(PIN_LED_YELLOW, y ? HIGH : LOW);
+    digitalWrite(PIN_LED_RED,    r ? HIGH : LOW);
 }
 
-class BleServerCallbacks : public NimBLEServerCallbacks {
-  void onConnect(NimBLEServer *server) override {
-    (void)server;
-    bleClientConnected = true;
-    bleClientReady = false;
-    bleFlushRequested = false;
-    Serial.println("BLE client connected");
-    Serial.println("Waiting for READY command from client before flushing backlog");
-  }
+static void buzzerOn()  { tone(PIN_BUZZER, BUZZER_FREQ_HZ); }
+static void buzzerOff() { noTone(PIN_BUZZER); digitalWrite(PIN_BUZZER, LOW); }
 
-  void onDisconnect(NimBLEServer *server) override {
-    bleClientConnected = false;
-    bleClientReady = false;
-    bleFlushRequested = false;
-    server->startAdvertising();
-    Serial.println("BLE client disconnected");
-    Serial.println("BLE advertising restarted");
-  }
-};
+static void applyState() {
+    switch (currentState) {
+        case STATE_ALL_ON:
+            setLeds(true, true, true);   buzzerOff(); break;
+        case STATE_GREEN:
+            setLeds(true, false, false); buzzerOff(); break;
+        case STATE_YELLOW:
+            setLeds(false, true, false); buzzerOff(); break;
+        case STATE_RED:
+            setLeds(false, false, true); buzzerOff(); break;
+        case STATE_BLINK_BUZZ:
+            blinkLevel  = true;
+            blinkLastMs = millis();
+            setLeds(true, true, true);
+            buzzerOn();
+            break;
+        default:
+            break;
+    }
+}
 
-class ControlCharacteristicCallbacks : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic *characteristic) override {
-    std::string value = characteristic->getValue();
-    String command = String(value.c_str());
-    command.trim();
-    command.toUpperCase();
+static void goToState(State next, const char *reason) {
+    if (next == currentState) return;
+    Serial.printf("[STATE] %s -> %s (%s)\n",
+                  STATE_NAMES[currentState], STATE_NAMES[next], reason);
+    currentState = next;
+    applyState();
+}
 
-    Serial.print("Control command received: ");
-    Serial.println(command);
+static void handleBlink() {
+    if (currentState != STATE_BLINK_BUZZ) return;
+    unsigned long now = millis();
+    if (now - blinkLastMs >= BLINK_INTERVAL_MS) {
+        blinkLastMs = now;
+        blinkLevel  = !blinkLevel;
+        setLeds(blinkLevel, blinkLevel, blinkLevel);
+    }
+}
 
-    if (command == "READY") {
-      bleClientReady = true;
-      requestFlushAfterReady();
-      characteristic->setValue("ACK:READY");
-      return;
+static void handleButton() {
+    int reading       = digitalRead(PIN_BUTTON);
+    unsigned long now = millis();
+
+    if (reading != btnLastReading) {
+        btnLastChange  = now;
+        btnLastReading = reading;
     }
 
-    if (command == "PING") {
-      characteristic->setValue("ACK:PING");
-      return;
+    if ((now - btnLastChange) >= DEBOUNCE_MS && reading != btnStable) {
+        btnStable = reading;
+        if (btnStable == LOW) {
+            State next = (State)((currentState + 1) % STATE_COUNT);
+            goToState(next, "button");
+        }
     }
-
-    characteristic->setValue("ERR:UNKNOWN_COMMAND");
-  }
-};
+}
 
 // =====================================================
-// UTILS
+// BMI160 I2C ACCESS
 // =====================================================
-// FreeRTOS Task Handles
-TaskHandle_t samplingTaskHandle = NULL;
-TaskHandle_t inferenceTaskHandle = NULL;
+static int16_t toInt16(uint8_t lsb, uint8_t msb) {
+    return (int16_t)((msb << 8) | lsb);
+}
 
-// Mutex for IMU data access
-portMUX_TYPE imuMux = vPortMUX_INITIALIZER_UNLOCKED;
-
-// =====================================================
-// BMI160 I2C HELPERS (with retries)
-// =====================================================
-bool writeReg(uint8_t reg, uint8_t value) {
-  for (int i = 0; i < 3; i++) {
+static bool writeReg(uint8_t reg, uint8_t value) {
     Wire.beginTransmission(bmi160Addr);
     Wire.write(reg);
     Wire.write(value);
-    if (Wire.endTransmission() == 0) return true;
-    delay(1);
-  }
-  return false;
+    return Wire.endTransmission() == 0;
 }
 
-bool readRegs(uint8_t reg, uint8_t *buffer, size_t len) {
-  for (int i = 0; i < 3; i++) {
+static bool readRegs(uint8_t reg, uint8_t *buf, size_t len) {
     Wire.beginTransmission(bmi160Addr);
     Wire.write(reg);
-    if (Wire.endTransmission(false) != 0) {
-      delay(1);
-      continue;
-    }
-    if (Wire.requestFrom((int)bmi160Addr, (int)len) != (int)len) {
-      delay(1);
-      continue;
-    }
-    for (size_t j = 0; j < len; j++) buffer[j] = Wire.read();
+    if (Wire.endTransmission(false) != 0) return false;
+
+    size_t got = Wire.requestFrom((int)bmi160Addr, (int)len, (int)true);
+    if (got != len) return false;
+    for (size_t i = 0; i < len; ++i) buf[i] = Wire.read();
     return true;
-  }
-  return false;
 }
 
-bool readReg(uint8_t reg, uint8_t &value) {
-  return readRegs(reg, &value, 1);
+static bool readReg(uint8_t reg, uint8_t &value) {
+    return readRegs(reg, &value, 1);
 }
 
-int16_t toInt16(uint8_t lsb, uint8_t msb) {
-  return (int16_t)((msb << 8) | lsb);
+static bool probeAddress(uint8_t addr) {
+    Wire.beginTransmission(addr);
+    return Wire.endTransmission() == 0;
 }
 
-bool probeAddress(uint8_t addr) {
-  Wire.beginTransmission(addr);
-  return Wire.endTransmission() == 0;
+static bool detectBMI160() {
+    uint8_t id = 0;
+    bmi160Addr = BMI160_ADDR_LOW;
+    if (readReg(REG_CHIP_ID, id) && id == BMI160_CHIP_ID) return true;
+    bmi160Addr = BMI160_ADDR_HIGH;
+    if (readReg(REG_CHIP_ID, id) && id == BMI160_CHIP_ID) return true;
+    return false;
 }
 
-void scanI2C() {
-  Serial.println("Scanning I2C bus...");
-  byte count = 0;
-  for (byte i = 1; i < 127; i++) {
-    Wire.beginTransmission(i);
-    if (Wire.endTransmission() == 0) {
-      Serial.printf("I2C device found at address 0x%02X\n", i);
-      count++;
+static bool initBMI160() {
+    if (!detectBMI160()) return false;
+
+    // Normal mode for accel + gyro
+    if (!writeReg(REG_CMD, 0x11)) return false;
+    delay(10);
+    if (!writeReg(REG_CMD, 0x15)) return false;
+    delay(80);
+
+    // 0x28 = ODR 100Hz, normal averaging
+    if (!writeReg(REG_ACC_CONF,  0x28)) return false;
+    if (!writeReg(REG_ACC_RANGE, 0x03)) return false;   // ±2g
+    if (!writeReg(REG_GYR_CONF,  0x28)) return false;
+    if (!writeReg(REG_GYR_RANGE, 0x00)) return false;   // ±2000 dps
+
+    delay(10);
+    return true;
+}
+
+static bool readImuSample(ImuSample &s) {
+    uint8_t d[6];
+    if (!readRegs(REG_ACC_DATA, d, 6)) return false;
+    s.ax = toInt16(d[0], d[1]) / ACC_LSB_PER_G;
+    s.ay = toInt16(d[2], d[3]) / ACC_LSB_PER_G;
+    s.az = toInt16(d[4], d[5]) / ACC_LSB_PER_G;
+
+    if (!readRegs(REG_GYR_DATA, d, 6)) return false;
+    s.gx = toInt16(d[0], d[1]) / GYR_LSB_PER_DPS;
+    s.gy = toInt16(d[2], d[3]) / GYR_LSB_PER_DPS;
+    s.gz = toInt16(d[4], d[5]) / GYR_LSB_PER_DPS;
+
+    s.tsMs = millis();
+    return true;
+}
+
+// =====================================================
+// WINDOW (ring buffer 100 mẫu = 2s @50Hz)
+// =====================================================
+static void resetWindow() {
+    windowHead = 0;
+    windowCount = 0;
+    samplesSinceInference = 0;
+}
+
+static void pushSample(const ImuSample &s) {
+    imuWindow[windowHead] = s;
+    windowHead = (windowHead + 1) % kWindowSize;
+    if (windowCount < kWindowSize) windowCount++;
+    samplesSinceInference++;
+}
+
+static int oldestIndex() {
+    return (windowCount < kWindowSize) ? 0 : windowHead;
+}
+
+static const ImuSample &orderedSampleAt(int idx) {
+    int start = oldestIndex();
+    return imuWindow[(start + idx) % kWindowSize];
+}
+
+static bool windowIsCandidate() {
+    float maxAcc = 0, maxGyr = 0;
+    for (int i = 0; i < kWindowSize; ++i) {
+        const ImuSample &s = orderedSampleAt(i);
+        float a = sqrtf(s.ax*s.ax + s.ay*s.ay + s.az*s.az);
+        float g = sqrtf(s.gx*s.gx + s.gy*s.gy + s.gz*s.gz);
+        if (a > maxAcc) maxAcc = a;
+        if (g > maxGyr) maxGyr = g;
     }
-  }
-  if (count == 0) Serial.println("No I2C devices found");
-  else Serial.printf("Total %d device(s) found\n", count);
+    bool pass = (maxAcc > CANDIDATE_ACC_THRESHOLD) || (maxGyr > CANDIDATE_GYRO_THRESHOLD);
+    Serial.printf("[PEAK]  acc=%.2fg gyro=%.1fdps -> %s\n",
+                  maxAcc, maxGyr, pass ? "candidate" : "skip");
+    return pass;
 }
 
-bool detectBMI160() {
-  uint8_t chipId = 0;
+// Cập nhật lịch sử hoạt động sau mỗi window.
+// Điều kiện "active": gyro > 50dps (xoay người — đặc trưng chuyển động thực sự).
+// Điều kiện "high impact": acc > 10g VÀ gyro > 400dps trong cùng 1 window.
+// AI chỉ chạy khi cả 2 điều kiện đều thoả: 3 window gyro liên tiếp + ít nhất 1 high impact.
+static void updateActivityCount() {
+    float maxAcc = 0, maxGyr = 0;
+    for (int i = 0; i < kWindowSize; ++i) {
+        const ImuSample &s = orderedSampleAt(i);
+        float a = sqrtf(s.ax*s.ax + s.ay*s.ay + s.az*s.az);
+        float g = sqrtf(s.gx*s.gx + s.gy*s.gy + s.gz*s.gz);
+        if (a > maxAcc) maxAcc = a;
+        if (g > maxGyr) maxGyr = g;
+    }
 
-  Serial.println("Detecting BMI160...");
-  
-  bmi160Addr = BMI160_ADDR_LOW;
-  if (readReg(REG_CHIP_ID, chipId)) {
-    Serial.printf("  Address 0x68: Got ID 0x%02X (Expected 0xD1)\n", chipId);
-    if (chipId == BMI160_CHIP_ID) return true;
-  } else {
-    Serial.println("  Address 0x68: No response");
-  }
-
-  bmi160Addr = BMI160_ADDR_HIGH;
-  if (readReg(REG_CHIP_ID, chipId)) {
-    Serial.printf("  Address 0x69: Got ID 0x%02X (Expected 0xD1)\n", chipId);
-    if (chipId == BMI160_CHIP_ID) return true;
-  } else {
-    Serial.println("  Address 0x69: No response");
-  }
-
-  return false;
+    bool active = (maxAcc > ACTIVITY_ACC_THRESHOLD) || (maxGyr > ACTIVITY_GYRO_THRESHOLD);
+    if (active) {
+        activityCount = min(activityCount + 1, ACTIVITY_WINDOW_COUNT);
+    } else {
+        activityCount = 0;
+    }
+    bool aiEnabled = (activityCount >= ACTIVITY_WINDOW_COUNT);
+    Serial.printf("[ACT]   acc=%.2fg gyro=%.1fdps -> %s (count=%d/%d) AI=%s\n",
+                  maxAcc, maxGyr, active ? "active" : "idle",
+                  activityCount, ACTIVITY_WINDOW_COUNT,
+                  aiEnabled ? "ON" : "OFF");
 }
 
-bool readAccelRaw(int16_t &axRaw, int16_t &ayRaw, int16_t &azRaw) {
-  uint8_t d[6];
-  if (!readRegs(REG_ACC_DATA, d, 6)) return false;
-  axRaw = toInt16(d[0], d[1]);
-  ayRaw = toInt16(d[2], d[3]);
-  azRaw = toInt16(d[4], d[5]);
-  return true;
+// =====================================================
+// TFLITE MICRO
+// =====================================================
+static int8_t quantizeInput(float v) {
+    float scale = inputTensor->params.scale;
+    int   zp    = inputTensor->params.zero_point;
+    int   q     = (int)lroundf(v / scale) + zp;
+    if (q > 127)  q = 127;
+    if (q < -128) q = -128;
+    return (int8_t)q;
 }
 
-bool readGyroRaw(int16_t &gxRaw, int16_t &gyRaw, int16_t &gzRaw) {
-  uint8_t d[6];
-  if (!readRegs(REG_GYR_DATA, d, 6)) return false;
-  gxRaw = toInt16(d[0], d[1]);
-  gyRaw = toInt16(d[2], d[3]);
-  gzRaw = toInt16(d[4], d[5]);
-  return true;
+static float dequantizeOutput(int8_t v) {
+    return (v - outputTensor->params.zero_point) * outputTensor->params.scale;
 }
 
-bool readBMI160StepCount(uint16_t &stepCount) {
-  (void)stepCount;
-  return false;
+static int countTensorElements(const TfLiteTensor *t) {
+    int c = 1;
+    for (int i = 0; i < t->dims->size; ++i) c *= t->dims->data[i];
+    return c;
 }
 
-bool initBMI160() {
-  if (!detectBMI160()) return false;
+static bool initModel() {
+    model = tflite::GetModel(fall_detection_model_tflite);
+    if (model->version() != TFLITE_SCHEMA_VERSION) {
+        Serial.println("[MODEL] schema mismatch");
+        return false;
+    }
 
-  if (!writeReg(REG_CMD, 0x11)) return false;
-  delay(10);
+    static tflite::MicroErrorReporter microErrorReporter;
+    errorReporter = &microErrorReporter;
+    static tflite::AllOpsResolver resolver;
+    static tflite::MicroInterpreter staticInterpreter(
+        model, resolver, tensorArena, kTensorArenaSize, errorReporter);
+    interpreter = &staticInterpreter;
 
-  if (!writeReg(REG_CMD, 0x15)) return false;
-  delay(80);
+    if (interpreter->AllocateTensors() != kTfLiteOk) {
+        Serial.println("[MODEL] AllocateTensors failed");
+        return false;
+    }
 
-  if (!writeReg(REG_ACC_CONF, 0x28)) return false;
-  if (!writeReg(REG_ACC_RANGE, 0x03)) return false;
+    inputTensor  = interpreter->input(0);
+    outputTensor = interpreter->output(0);
 
-  if (!writeReg(REG_GYR_CONF, 0x28)) return false;
-  if (!writeReg(REG_GYR_RANGE, 0x00)) return false;
+    if (inputTensor->type != kTfLiteInt8 || outputTensor->type != kTfLiteInt8) {
+        Serial.println("[MODEL] tensor type != int8");
+        return false;
+    }
+    if (inputTensor->dims->size != 3 ||
+        inputTensor->dims->data[0] != 1 ||
+        inputTensor->dims->data[1] != kWindowSize ||
+        inputTensor->dims->data[2] != kFeatureCount) {
+        Serial.println("[MODEL] unexpected input shape");
+        return false;
+    }
 
-  delay(10);
-  return true;
+    outputElementCount = countTensorElements(outputTensor);
+    Serial.printf("[MODEL] ready (in scale=%.6f zp=%d, out scale=%.6f zp=%d, out=%d)\n",
+                  inputTensor->params.scale, inputTensor->params.zero_point,
+                  outputTensor->params.scale, outputTensor->params.zero_point,
+                  outputElementCount);
+    return true;
 }
 
-bool readImuSample(ImuSample &sample) {
-  if (!bmiOk) return false;
-
-  int16_t axRaw, ayRaw, azRaw;
-  int16_t gxRaw, gyRaw, gzRaw;
-  if (!readAccelRaw(axRaw, ayRaw, azRaw)) return false;
-  if (!readGyroRaw(gxRaw, gyRaw, gzRaw)) return false;
-
-  sample.ax = axRaw / ACC_LSB_PER_G;
-  sample.ay = ayRaw / ACC_LSB_PER_G;
-  sample.az = azRaw / ACC_LSB_PER_G;
-  sample.gx = gxRaw / GYR_LSB_PER_DPS;
-  sample.gy = gyRaw / GYR_LSB_PER_DPS;
-  sample.gz = gzRaw / GYR_LSB_PER_DPS;
-  sample.tsMs = millis();
-  return true;
+// Kiểm tra peak gyro trong toàn bộ 2s window: ngã thật có rotation mạnh, đặt nhẹ thì không.
+static bool checkImpactInWindow() {
+    float peakGyro = 0, peakAcc = 0;
+    for (int i = 0; i < kWindowSize; ++i) {
+        const ImuSample &s = orderedSampleAt(i);
+        float a = sqrtf(s.ax*s.ax + s.ay*s.ay + s.az*s.az);
+        float g = sqrtf(s.gx*s.gx + s.gy*s.gy + s.gz*s.gz);
+        if (a > peakAcc) peakAcc = a;
+        if (g > peakGyro) peakGyro = g;
+    }
+    bool hasImpact = peakGyro >= FALL_IMPACT_GYRO_MIN;
+    Serial.printf("[IMPACT] peak_acc=%.2fg peak_gyro=%.1fdps -> %s\n",
+                  peakAcc, peakGyro, hasImpact ? "OK" : "reject (no rotation)");
+    return hasImpact;
 }
 
-uint32_t currentUnixTimeSecUtc() {
-  return SIMULATED_UNIX_EPOCH_BASE_UTC + (millis() / 1000UL);
+// Kiểm tra 0.5s cuối window: người có đang nằm/ngồi im không?
+// Ngã thật: impact spike ở đầu/giữa window → nằm im cuối window.
+// Chuyển động giả: vung tay / va chạm nhẹ → tiếp tục di chuyển.
+static bool checkPostFallStillness() {
+    if (windowCount < kWindowSize) return false;
+
+    float accSum = 0, gyrSum = 0;
+    int   start  = kWindowSize - STILLNESS_SAMPLES;
+
+    for (int i = start; i < kWindowSize; ++i) {
+        const ImuSample &s = orderedSampleAt(i);
+        accSum += sqrtf(s.ax*s.ax + s.ay*s.ay + s.az*s.az);
+        gyrSum += sqrtf(s.gx*s.gx + s.gy*s.gy + s.gz*s.gz);
+    }
+
+    float meanAcc = accSum / STILLNESS_SAMPLES;
+    float meanGyr = gyrSum / STILLNESS_SAMPLES;
+
+    bool still = (meanAcc >= STILLNESS_ACC_MIN && meanAcc <= STILLNESS_ACC_MAX)
+              && (meanGyr <= STILLNESS_GYRO_MAX);
+
+    Serial.printf("[STILL] mean_acc=%.2fg mean_gyro=%.1fdps -> %s\n",
+                  meanAcc, meanGyr, still ? "STILL (pass)" : "moving (reject)");
+    return still;
 }
 
-bool readVitalsSample(VitalSample &sample) {
-  sample.timestampSec = currentUnixTimeSecUtc();
-  sample.heartRate = (uint8_t)random(68, 96);
-  sample.spo2 = (uint8_t)random(94, 100);
-  return true;
-}
-
-void resetWindow() {
-  windowHead = 0;
-  windowCount = 0;
-  samplesSinceInference = 0;
-}
-
-void resetVitalsState() {
-  vitalsHistoryHead = 0;
-  vitalsHistoryCount = 0;
-  lastVitalsSampleMs = millis();
-  lastVitalsDispatchMs = millis();
-}
-
-void pushSample(const ImuSample &sample) {
-  imuWindow[windowHead] = sample;
-  windowHead = (windowHead + 1) % kWindowSize;
-  if (windowCount < kWindowSize) {
-    windowCount++;
-  }
-  samplesSinceInference++;
-}
-
-void pushVitalsHistory(const VitalSample &sample) {
-  vitalsHistory[vitalsHistoryHead] = sample;
-  vitalsHistoryHead = (vitalsHistoryHead + 1) % VITALS_BATCH_SIZE;
-  if (vitalsHistoryCount < VITALS_BATCH_SIZE) {
-    vitalsHistoryCount++;
-  }
-}
-
-VitalSample orderedVitalSampleAt(uint8_t idx) {
-  uint8_t start = (vitalsHistoryCount < VITALS_BATCH_SIZE) ? 0 : vitalsHistoryHead;
-  return vitalsHistory[(start + idx) % VITALS_BATCH_SIZE];
-}
-
-bool buildLatestVitalsBatch(VitalsBatchPacket &packet) {
-  if (vitalsHistoryCount < VITALS_BATCH_SIZE) return false;
-
-  packet.sequence = nextVitalsSequence++;
-  for (uint8_t i = 0; i < VITALS_BATCH_SIZE; ++i) {
-    VitalSample sample = orderedVitalSampleAt(i);
-    packet.heartRate[i] = sample.heartRate;
-    packet.spo2[i] = sample.spo2;
-    packet.timestampSec[i] = sample.timestampSec;
-  }
-  return true;
-}
-
-size_t vitalsQueueIndex(size_t index) {
-  return (vitalsQueueHead + index) % VITALS_QUEUE_CAPACITY;
-}
-
-size_t fallQueueIndex(size_t index) {
-  return (fallQueueHead + index) % FALL_QUEUE_CAPACITY;
-}
-
-void enqueueVitalsBatch(const VitalsBatchPacket &packet) {
-  if (vitalsQueueCount == VITALS_QUEUE_CAPACITY) {
-    vitalsQueueHead = vitalsQueueIndex(1);
-    vitalsQueueCount--;
-  }
-
-  size_t tail = vitalsQueueIndex(vitalsQueueCount);
-  vitalsQueue[tail] = packet;
-  vitalsQueueCount++;
-}
-
-void dequeueVitalsBatch() {
-  if (vitalsQueueCount == 0) return;
-  vitalsQueueHead = vitalsQueueIndex(1);
-  vitalsQueueCount--;
-}
-
-void enqueueFallAlert(const FallAlertPacket &packet) {
-  if (fallQueueCount == FALL_QUEUE_CAPACITY) {
-    fallQueueHead = fallQueueIndex(1);
-    fallQueueCount--;
-  }
-
-  size_t tail = fallQueueIndex(fallQueueCount);
-  fallQueue[tail] = packet;
-  fallQueueCount++;
-}
-
-void dequeueFallAlert() {
-  if (fallQueueCount == 0) return;
-  fallQueueHead = fallQueueIndex(1);
-  fallQueueCount--;
-}
-
-int oldestIndex() {
-  if (windowCount < kWindowSize) return 0;
-  return windowHead;
-}
-
-ImuSample orderedSampleAt(int idx) {
-  int start = oldestIndex();
-  return imuWindow[(start + idx) % kWindowSize];
-}
-
-bool windowIsCandidate(float &maxAccMag, float &maxGyroMag) {
-  maxAccMag = 0.0f;
-  maxGyroMag = 0.0f;
-
-  for (int i = 0; i < kWindowSize; ++i) {
-    ImuSample s = orderedSampleAt(i);
-    float accMag = sqrtf(s.ax * s.ax + s.ay * s.ay + s.az * s.az);
-    float gyroMag = sqrtf(s.gx * s.gx + s.gy * s.gy + s.gz * s.gz);
-
-    if (accMag > maxAccMag) maxAccMag = accMag;
-    if (gyroMag > maxGyroMag) maxGyroMag = gyroMag;
-  }
-
-  return (maxAccMag > CANDIDATE_ACC_THRESHOLD) ||
-         (maxGyroMag > CANDIDATE_GYRO_THRESHOLD);
-}
-
-int8_t quantizeInput(float value) {
-  const float scale = inputTensor->params.scale;
-  const int zeroPoint = inputTensor->params.zero_point;
-
-  int q = (int)lroundf(value / scale) + zeroPoint;
-  if (q > 127) q = 127;
-  if (q < -128) q = -128;
-  return (int8_t)q;
-}
-
-float dequantizeOutput(int8_t value) {
-  return (value - outputTensor->params.zero_point) * outputTensor->params.scale;
-}
-
-int countTensorElements(const TfLiteTensor *tensor) {
-  int count = 1;
-  for (int i = 0; i < tensor->dims->size; ++i) {
-    count *= tensor->dims->data[i];
-  }
-  return count;
-}
-
-bool initModel() {
-  model = tflite::GetModel(fall_detection_model_tflite);
-  if (model->version() != TFLITE_SCHEMA_VERSION) {
-    Serial.println("Model schema mismatch");
-    return false;
-  }
-
-  static tflite::MicroErrorReporter microErrorReporter;
-  errorReporter = &microErrorReporter;
-  static tflite::AllOpsResolver resolver;
-  static tflite::MicroInterpreter staticInterpreter(
-      model, resolver, tensorArena, kTensorArenaSize, errorReporter);
-
-  interpreter = &staticInterpreter;
-
-  if (interpreter->AllocateTensors() != kTfLiteOk) {
-    Serial.println("AllocateTensors failed");
-    return false;
-  }
-
-  inputTensor = interpreter->input(0);
-  outputTensor = interpreter->output(0);
-
-  if (inputTensor->type != kTfLiteInt8 || outputTensor->type != kTfLiteInt8) {
-    Serial.println("Model tensor type is not int8");
-    return false;
-  }
-
-  if (inputTensor->dims->size != 3 ||
-      inputTensor->dims->data[0] != 1 ||
-      inputTensor->dims->data[1] != kWindowSize ||
-      inputTensor->dims->data[2] != kFeatureCount) {
-    Serial.println("Unexpected input tensor shape");
-    return false;
-  }
-
-  outputElementCount = countTensorElements(outputTensor);
-  if (outputElementCount != 1 && outputElementCount != 2) {
-    Serial.println("Unexpected output tensor shape");
-    return false;
-  }
-
-  Serial.println("TFLite Micro ready");
-  Serial.printf("Input: scale=%.6f, zero_point=%d\n", inputTensor->params.scale, inputTensor->params.zero_point);
-  Serial.printf("Output: scale=%.6f, zero_point=%d, elements=%d\n", 
-                outputTensor->params.scale, outputTensor->params.zero_point, outputElementCount);
-  return true;
-}
-
-bool runInference(float &fallProb,
-                  float &nonFallProb,
-                  uint32_t &tsStart,
-                  uint32_t &tsEnd) {
-  if (windowCount < kWindowSize) return false;
-
-  float maxAccMag = 0.0f;
-  float maxGyroMag = 0.0f;
-  bool candidate = windowIsCandidate(maxAccMag, maxGyroMag);
-
-  ImuSample first = orderedSampleAt(0);
-  ImuSample last = orderedSampleAt(kWindowSize - 1);
-  tsStart = first.tsMs;
-  tsEnd = last.tsMs;
-
-  if (!candidate) {
-    Serial.printf("Non-candidate window: maxAcc=%.2f, maxGyro=%.2f\n", maxAccMag, maxGyroMag);
+static bool runInference(float &fallProb) {
     fallProb = 0.0f;
-    nonFallProb = 1.0f;
+    if (!modelOk || windowCount < kWindowSize) return false;
+
+    if (!windowIsCandidate()) {
+        // chuyển động yếu — bỏ qua inference để tiết kiệm CPU
+        return true;
+    }
+
+    for (int t = 0; t < kWindowSize; ++t) {
+        const ImuSample &s = orderedSampleAt(t);
+        inputTensor->data.int8[t * kFeatureCount + 0] = quantizeInput(s.ax);
+        inputTensor->data.int8[t * kFeatureCount + 1] = quantizeInput(s.ay);
+        inputTensor->data.int8[t * kFeatureCount + 2] = quantizeInput(s.az);
+        inputTensor->data.int8[t * kFeatureCount + 3] = quantizeInput(s.gx);
+        inputTensor->data.int8[t * kFeatureCount + 4] = quantizeInput(s.gy);
+        inputTensor->data.int8[t * kFeatureCount + 5] = quantizeInput(s.gz);
+    }
+
+    if (interpreter->Invoke() != kTfLiteOk) {
+        Serial.println("[MODEL] invoke failed");
+        return false;
+    }
+
+    if (outputElementCount == 1) {
+        float p = dequantizeOutput(outputTensor->data.int8[0]);
+        fallProb = constrain(p, 0.0f, 1.0f);
+    } else {
+        fallProb = dequantizeOutput(outputTensor->data.int8[1]);
+    }
     return true;
-  }
-
-  Serial.printf("CANDIDATE window: maxAcc=%.2f, maxGyro=%.2f -> running inference\n", maxAccMag, maxGyroMag);
-
-  for (int t = 0; t < kWindowSize; ++t) {
-    ImuSample s = orderedSampleAt(t);
-    inputTensor->data.int8[t * kFeatureCount + 0] = quantizeInput(s.ax);
-    inputTensor->data.int8[t * kFeatureCount + 1] = quantizeInput(s.ay);
-    inputTensor->data.int8[t * kFeatureCount + 2] = quantizeInput(s.az);
-    inputTensor->data.int8[t * kFeatureCount + 3] = quantizeInput(s.gx);
-    inputTensor->data.int8[t * kFeatureCount + 4] = quantizeInput(s.gy);
-    inputTensor->data.int8[t * kFeatureCount + 5] = quantizeInput(s.gz);
-  }
-
-  if (interpreter->Invoke() != kTfLiteOk) {
-    Serial.println("Invoke failed");
-    return false;
-  }
-
-  if (outputElementCount == 1) {
-    int8_t rawValue = outputTensor->data.int8[0];
-    fallProb = dequantizeOutput(rawValue);
-    Serial.printf("Inference (1 output): raw=%d, prob=%.3f\n", rawValue, fallProb);
-    if (fallProb < 0.0f) fallProb = 0.0f;
-    if (fallProb > 1.0f) fallProb = 1.0f;
-    nonFallProb = 1.0f - fallProb;
-  } else {
-    int8_t rawNonFall = outputTensor->data.int8[0];
-    int8_t rawFall = outputTensor->data.int8[1];
-    nonFallProb = dequantizeOutput(rawNonFall);
-    fallProb = dequantizeOutput(rawFall);
-    Serial.printf("Inference (2 outputs): rawNF=%d, rawF=%d -> fallProb=%.3f\n", rawNonFall, rawFall, fallProb);
-  }
-  return true;
 }
 
-void handleButton() {
-  bool reading = digitalRead(BUTTON_PIN);
+// =====================================================
+// SAMPLING + INFERENCE PIPELINE
+// =====================================================
+static void runSamplingAndInference() {
+    if (!bmiOk) return;
 
-  // Debug: every change in reading
-  if (reading != lastButtonReading) {
-    Serial.printf("Raw Button Logic: reading=%d, lastReading=%d, currentState=%d\n", reading, lastButtonReading, buttonState);
-    lastDebounceTime = millis();
-  }
+    uint32_t now = millis();
+    if ((uint32_t)(now - lastSampleMs) < SAMPLE_PERIOD_MS) return;
+    lastSampleMs += SAMPLE_PERIOD_MS;
 
-  if ((millis() - lastDebounceTime) > debounceDelay) {
-    if (reading != buttonState) {
-      buttonState = reading;
-
-      if (buttonState == LOW) {
-        acquisitionEnabled = !acquisitionEnabled;
-        // Commented out LED control as pin 48 is often RGB on S3
-        // digitalWrite(LED_PIN, acquisitionEnabled ? HIGH : LOW);
-        resetWindow();
-        resetVitalsState();
-        lastSampleMs = millis();
-
-        Serial.print("Acquisition -> ");
-        Serial.println(acquisitionEnabled ? "ON" : "OFF");
-      }
+    ImuSample s;
+    if (!readImuSample(s)) {
+        Serial.println("[IMU]  read failed");
+        return;
     }
-  }
+    pushSample(s);
 
-  lastButtonReading = reading;
-}
+    if (windowCount < kWindowSize || samplesSinceInference < kInferenceStride) {
+        return;
+    }
+    samplesSinceInference = 0;
 
-bool notifyIfConnected(NimBLECharacteristic *characteristic, const String &payload) {
-  characteristic->setValue(
-      reinterpret_cast<const uint8_t *>(payload.c_str()),
-      payload.length());
-  if (!bleClientConnected) return false;
-  characteristic->notify();
-  delay(BLE_NOTIFY_SPACING_MS);
-  return bleClientConnected;
-}
+    // Cập nhật lịch sử hoạt động mỗi window (luôn chạy, trước mọi gate khác)
+    updateActivityCount();
 
-String formatVitalsBatchPayload(const VitalsBatchPacket &packet) {
-  String payload = "BATCH,";
-  payload += String(packet.sequence);
-  payload += ",";
-  for (uint8_t i = 0; i < VITALS_BATCH_SIZE; ++i) {
-    if (i > 0) payload += "|";
-    payload += String(packet.heartRate[i]);
-  }
-  payload += ",";
-  for (uint8_t i = 0; i < VITALS_BATCH_SIZE; ++i) {
-    if (i > 0) payload += "|";
-    payload += String(packet.spo2[i]);
-  }
-  payload += ",";
-  for (uint8_t i = 0; i < VITALS_BATCH_SIZE; ++i) {
-    if (i > 0) payload += "|";
-    payload += String(packet.timestampSec[i]);
-  }
-  return payload;
-}
-
-String formatFallAlertPayload(const FallAlertPacket &packet) {
-  String payload = "ALERT,";
-  payload += String(packet.sequence);
-  payload += ",";
-  payload += String(packet.timestampSec);
-  payload += ",fall,";
-  payload += String(packet.statusCode);
-  payload += ",";
-  payload += String(packet.fallProb, 3);
-  payload += ",";
-  payload += String(packet.nonFallProb, 3);
-  return payload;
-}
-
-bool sendVitalsBatch(const VitalsBatchPacket &packet) {
-  String payload = formatVitalsBatchPayload(packet);
-  bool sent = notifyIfConnected(vitalsCharacteristic, payload);
-  if (sent) {
-    Serial.print("Vitals batch sent: ");
-    Serial.println(payload);
-  }
-  return sent;
-}
-
-bool sendFallAlert(const FallAlertPacket &packet) {
-  String payload = formatFallAlertPayload(packet);
-  bool sent = notifyIfConnected(statusCharacteristic, payload);
-  if (sent) {
-    Serial.print("Fall alert sent: ");
-    Serial.println(payload);
-  }
-  return sent;
-}
-
-void flushBleBacklog() {
-  if (!bleClientConnected) return;
-
-  while (bleClientConnected && fallQueueCount > 0) {
-    if (!sendFallAlert(fallQueue[fallQueueHead])) break;
-    dequeueFallAlert();
-  }
-
-  while (bleClientConnected && vitalsQueueCount > 0) {
-    if (!sendVitalsBatch(vitalsQueue[vitalsQueueHead])) break;
-    dequeueVitalsBatch();
-  }
-
-  if (bleClientConnected) {
-    Serial.println("Backlog flush completed");
-  }
-  bleFlushRequested = false;
-}
-
-void queueOrSendVitalsBatch(const VitalsBatchPacket &packet) {
-  if (bleClientConnected && sendVitalsBatch(packet)) return;
-  enqueueVitalsBatch(packet);
-  Serial.print("Vitals batch queued, size=");
-  Serial.println((int)vitalsQueueCount);
-}
-
-void queueOrSendFallAlert(const FallAlertPacket &packet) {
-  if (bleClientConnected && sendFallAlert(packet)) return;
-  enqueueFallAlert(packet);
-  Serial.print("Fall alert queued, size=");
-  Serial.println((int)fallQueueCount);
-}
-
-void maybeSampleVitals() {
-  uint32_t now = millis();
-  if ((uint32_t)(now - lastVitalsSampleMs) < VITALS_SAMPLE_PERIOD_MS) return;
-  lastVitalsSampleMs += VITALS_SAMPLE_PERIOD_MS;
-
-  VitalSample sample;
-  if (!readVitalsSample(sample)) {
-    Serial.println("Vitals read failed");
-    return;
-  }
-
-  pushVitalsHistory(sample);
-  Serial.print("Vitals sample collected: hr=");
-  Serial.print(sample.heartRate);
-  Serial.print(" spo2=");
-  Serial.print(sample.spo2);
-  Serial.print(" ts=");
-  Serial.println(sample.timestampSec);
-}
-
-void maybeDispatchVitalsBatch() {
-  uint32_t now = millis();
-  if ((uint32_t)(now - lastVitalsDispatchMs) < VITALS_DISPATCH_PERIOD_MS) return;
-  lastVitalsDispatchMs += VITALS_DISPATCH_PERIOD_MS;
-
-  VitalsBatchPacket packet;
-  if (!buildLatestVitalsBatch(packet)) return;
-  queueOrSendVitalsBatch(packet);
-}
-
-void initBle() {
-  NimBLEDevice::init(BLE_DEVICE_NAME);
-  NimBLEDevice::setPower(ESP_PWR_LVL_P9);
-  bleServer = NimBLEDevice::createServer();
-  bleServer->setCallbacks(new BleServerCallbacks());
-
-  NimBLEService *service = bleServer->createService(BLE_SERVICE_UUID);
-
-  statusCharacteristic = service->createCharacteristic(
-      BLE_STATUS_CHAR_UUID,
-      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-  vitalsCharacteristic = service->createCharacteristic(
-      BLE_VITALS_CHAR_UUID,
-      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-  controlCharacteristic = service->createCharacteristic(
-      BLE_CONTROL_CHAR_UUID,
-      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE);
-  controlCharacteristic->setCallbacks(new ControlCharacteristicCallbacks());
-
-  statusCharacteristic->setValue("ALERT,0,0,idle,0,0.000,1.000");
-  vitalsCharacteristic->setValue(
-      "BATCH,0,255|255|255|255|255,255|255|255|255|255,0|0|0|0|0");
-  controlCharacteristic->setValue("WAITING_READY");
-
-  service->start();
-
-  NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
-  advertising->addServiceUUID(BLE_SERVICE_UUID);
-  advertising->setScanResponse(true);
-  advertising->start();
-
-  Serial.println("BLE advertising started");
-  Serial.printf("Device name: %s\n", BLE_DEVICE_NAME);
-}
-
-void samplingTask(void *pvParameters) {
-  TickType_t xLastWakeTime = xTaskGetTickCount();
-  const TickType_t xFrequency = pdMS_TO_TICKS(SAMPLE_PERIOD_MS);
-  ImuSample sample;
-
-  Serial.println("Sampling task STARTED");
-  for (;;) {
-    vTaskDelayUntil(&xLastWakeTime, xFrequency);
-
-    if (!acquisitionEnabled || !bmiOk) continue;
-
-    if (readImuSample(sample)) {
-      portENTER_CRITICAL(&imuMux);
-      pushSample(sample);
-      portEXIT_CRITICAL(&imuMux);
-      
-      maybeSampleVitals();
-      maybeDispatchVitalsBatch();
-
-      if (samplesSinceInference >= kInferenceStride && windowCount >= kWindowSize) {
-        if (inferenceTaskHandle != NULL) {
-          xTaskNotifyGive(inferenceTaskHandle);
+    // ── FALL_WATCH: đang theo dõi xem có nằm im không sau ngã ──
+    // Bypass activity gate — người đang nằm sau ngã thì activityCount = 0.
+    if (fallDetectState == FDS_FALL_WATCH) {
+        bool isStill = checkPostFallStillness();
+        fallWatchLeft--;
+        Serial.printf("[WATCH] window %d left, still=%s\n",
+                      fallWatchLeft + 1, isStill ? "YES" : "NO");
+        if (isStill) {
+            fallDetectState  = FDS_STILL_TIMING;
+            stillnessStartMs = millis();
+            Serial.println("[FALL]  stillness detected → bắt đầu tính thời gian");
+        } else if (fallWatchLeft <= 0) {
+            Serial.println("[FALL]  watch expired — không nằm im → IDLE");
+            fallDetectState = FDS_IDLE;
         }
-      }
+        return;
     }
-  }
+
+    // ── STILL_TIMING: đang đo thời gian nằm im ─────────────────
+    // Tiếp tục cho đến khi đủ FALL_STILL_DURATION_MS hoặc cử động.
+    if (fallDetectState == FDS_STILL_TIMING) {
+        bool isStill  = checkPostFallStillness();
+        uint32_t elapsed = millis() - stillnessStartMs;
+        if (isStill) {
+            Serial.printf("[STILL] nằm im %lus / %lus\n",
+                          elapsed / 1000, FALL_STILL_DURATION_MS / 1000);
+            if (elapsed >= FALL_STILL_DURATION_MS) {
+                fallDetectState = FDS_IDLE;
+                if (currentState != STATE_BLINK_BUZZ)
+                    goToState(STATE_BLINK_BUZZ, "still >5s → fall confirmed");
+            }
+        } else {
+            Serial.printf("[STILL] cử động sau %lus → IDLE\n", elapsed / 1000);
+            fallDetectState = FDS_IDLE;
+        }
+        return;
+    }
+
+    // ── Pre-activity gate (chỉ áp dụng khi FDS_IDLE) ───────────
+    if (activityCount < ACTIVITY_WINDOW_COUNT) {
+        Serial.printf("[ACT]   gate blocked (count=%d/%d)\n",
+                      activityCount, ACTIVITY_WINDOW_COUNT);
+        return;
+    }
+
+    // ── AI inference ────────────────────────────────────────────
+    float fallProb = 0.0f;
+    if (!runInference(fallProb)) return;
+
+    bool isFall = fallProb >= FALL_DECISION_THRESHOLD;
+    Serial.printf("[INFER] fall_prob=%.3f -> %s\n",
+                  fallProb, isFall ? "FALL?" : "non-fall");
+    if (!isFall) return;
+
+    // Impact check
+    if (!checkImpactInWindow()) return;
+
+    // Fall xác nhận → vào FALL_WATCH, không cần stillness ngay
+    Serial.printf("[FALL]  detected! Entering FALL_WATCH (%d windows = %ds)\n",
+                  FALL_WATCH_WINDOWS, FALL_WATCH_WINDOWS * 2);
+    fallDetectState = FDS_FALL_WATCH;
+    fallWatchLeft   = FALL_WATCH_WINDOWS;
 }
 
-void inferenceTask(void *pvParameters) {
-  Serial.println("Inference task STARTED");
-  for (;;) {
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
-    if (!acquisitionEnabled) continue;
-
-    float fallProb = 0.0f, nonFallProb = 0.0f;
-    uint32_t tsStart = 0, tsEnd = 0;
-    
-    if (runInference(fallProb, nonFallProb, tsStart, tsEnd)) {
-      portENTER_CRITICAL(&imuMux);
-      samplesSinceInference = 0;
-      portEXIT_CRITICAL(&imuMux);
-
-      if (fallProb >= FALL_DECISION_THRESHOLD) {
-        FallAlertPacket packet;
-        packet.sequence = nextFallSequence++;
-        packet.timestampSec = currentUnixTimeSecUtc();
-        packet.statusCode = 1;
-        packet.fallProb = fallProb;
-        packet.nonFallProb = nonFallProb;
-        queueOrSendFallAlert(packet);
-      }
-    }
-  }
-}
-
+// =====================================================
+// ARDUINO ENTRY
+// =====================================================
 void setup() {
-  Serial.begin(115200);
-  delay(1000);
-  randomSeed((uint32_t)esp_random());
+    Serial.begin(SERIAL_BAUD);
+    delay(200);
+    Serial.println();
+    Serial.println("===============================================");
+    Serial.println("ESP32-S3  LED + Buzzer + Button + BMI160 + AI");
+    Serial.println("===============================================");
 
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LOW);
+    pinMode(PIN_LED_GREEN,  OUTPUT);
+    pinMode(PIN_LED_YELLOW, OUTPUT);
+    pinMode(PIN_LED_RED,    OUTPUT);
+    pinMode(PIN_BUTTON,     INPUT_PULLUP);
+    // Buzzer: init LEDC trước khi gọi tone()/noTone()
+    pinMode(PIN_BUZZER, OUTPUT);
+    digitalWrite(PIN_BUZZER, LOW);
+    tone(PIN_BUZZER, 1);   // khởi tạo LEDC channel
+    noTone(PIN_BUZZER);
 
-  Serial.println();
-  Serial.println("=== ESP32-S3 BMI160 Fall Detection BLE ===");
+    Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 100000);
+    Wire.setClock(100000);
+    Wire.setTimeOut(20);
+    delay(50);
 
-  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN, 100000);
-  Wire.setClock(100000);
-  Wire.setTimeOut(20);
-  delay(100);
+    Serial.printf("[I2C]  probe 0x68: %s\n", probeAddress(0x68) ? "OK" : "FAIL");
+    Serial.printf("[I2C]  probe 0x69: %s\n", probeAddress(0x69) ? "OK" : "FAIL");
 
-  scanI2C();
+    bmiOk = initBMI160();
+    Serial.printf("[BMI]  %s\n", bmiOk ? "ready" : "NOT FOUND");
 
-  bmiOk = initBMI160();
-  if (bmiOk) {
-    Serial.println("BMI160 initialization SUCCESS");
-  } else {
-    Serial.println("BMI160 initialization FAILED - check wiring and power");
-  }
+    modelOk = initModel();
+    if (!modelOk) {
+        Serial.println("[MODEL] init failed — chỉ chạy state machine, không phát hiện ngã");
+    }
 
-  initBle();
+    resetWindow();
+    lastSampleMs = millis();
 
-  if (!initModel()) {
-    Serial.println("Model init failed");
-    while (true) delay(1000);
-  }
-
-  resetVitalsState();
-
-  // Create tasks
-  xTaskCreatePinnedToCore(samplingTask, "sampling", 4096, NULL, 10, &samplingTaskHandle, 1);
-  xTaskCreatePinnedToCore(inferenceTask, "inference", 8192, NULL, 5, &inferenceTaskHandle, 0);
-
-  Serial.println("System fully initialized");
+    applyState();
+    Serial.printf("[STATE] init -> %s\n", STATE_NAMES[currentState]);
+    Serial.println("[BOOT] OK. Nhấn nút để chuyển state. Té ngã -> tự bật alarm.");
 }
 
 void loop() {
-  handleButton();
-
-  if (bleFlushRequested && bleClientConnected) {
-    flushBleBacklog();
-  }
-
-  vTaskDelay(pdMS_TO_TICKS(10));
+    handleButton();
+    handleBlink();
+    runSamplingAndInference();
 }

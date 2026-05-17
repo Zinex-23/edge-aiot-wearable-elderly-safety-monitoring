@@ -26,6 +26,8 @@ import com.aifd.data.MockDataProvider
 import com.aifd.data.UserRole
 import com.aifd.ui.components.LineChart
 import com.aifd.ui.components.StepsBarChart
+import com.aifd.ui.components.aifd.AifdChartCard
+import com.aifd.ui.components.aifd.AifdChartEmptyState
 import com.aifd.ui.localization.AppLocalizations
 import com.aifd.ui.theme.AIFDTheme
 import com.aifd.ui.theme.AIFDThemeExt
@@ -228,16 +230,14 @@ private fun HeartRateContent(
         }
     }
 
-    // Chart — only for 1h and 24h, not LIVE
-    if (uiState.timeRange != TimeRange.LIVE && uiState.chartData.filter { it > 0 }.isNotEmpty()) {
-        ElevatedCard(shape = RoundedCornerShape(16.dp)) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = strings.heartRateTrend,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Spacer(Modifier.height(8.dp))
+    // Chart card — only rendered for 1h and 24h modes (LIVE focuses on current value)
+    if (uiState.timeRange != TimeRange.LIVE) {
+        val hasChartData = uiState.chartData.any { it > 0 }
+        AifdChartCard(
+            title    = strings.heartRateTrend,
+            trailing = if (uiState.timeRange == TimeRange.ONE_HOUR) "1h" else "24h"
+        ) {
+            if (hasChartData) {
                 LineChart(
                     data      = uiState.chartData,
                     lineColor = MaterialTheme.colorScheme.error,
@@ -245,12 +245,16 @@ private fun HeartRateContent(
                     timeRange = uiState.timeRange,
                     unit      = "bpm"
                 )
+            } else {
+                AifdChartEmptyState(
+                    title    = strings.noChartData,
+                    subtitle = strings.waitingForReadings
+                )
             }
         }
-    }
-
-    if (uiState.timeRange != TimeRange.LIVE && uiState.chartData.filter { it > 0 }.isNotEmpty()) {
-        StatsRow(stats)
+        if (hasChartData) {
+            StatsRow(stats)
+        }
     }
 
     // Info card: show connect prompt when no data, otherwise health info
@@ -399,15 +403,13 @@ private fun SpO2Content(
         }
     }
 
-    if (uiState.timeRange != TimeRange.LIVE && uiState.chartData.filter { it > 0 }.isNotEmpty()) {
-        ElevatedCard(shape = RoundedCornerShape(16.dp)) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = strings.spo2Trend,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Spacer(Modifier.height(8.dp))
+    if (uiState.timeRange != TimeRange.LIVE) {
+        val hasChartData = uiState.chartData.any { it > 0 }
+        AifdChartCard(
+            title    = strings.spo2Trend,
+            trailing = if (uiState.timeRange == TimeRange.ONE_HOUR) "1h" else "24h"
+        ) {
+            if (hasChartData) {
                 LineChart(
                     data      = uiState.chartData,
                     lineColor = MaterialTheme.colorScheme.primary,
@@ -415,12 +417,16 @@ private fun SpO2Content(
                     timeRange = uiState.timeRange,
                     unit      = "%"
                 )
+            } else {
+                AifdChartEmptyState(
+                    title    = strings.noChartData,
+                    subtitle = strings.waitingForReadings
+                )
             }
         }
-    }
-
-    if (uiState.timeRange != TimeRange.LIVE && uiState.chartData.filter { it > 0 }.isNotEmpty()) {
-        StatsRow(stats, "%")
+        if (hasChartData) {
+            StatsRow(stats, "%")
+        }
     }
 
     // Info card: show connect prompt when no data, otherwise health info

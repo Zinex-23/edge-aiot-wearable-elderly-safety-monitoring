@@ -1,0 +1,22 @@
+{
+  "version": 71,
+  "accuracy": 0.9011194029850746,
+  "precision": 0.8745644599303136,
+  "recall": 0.9365671641791045,
+  "f1": 0.9045045045045045,
+  "false_alarm_rate": 0.13432835820895522,
+  "miss_rate": 0.06343283582089553,
+  "best_threshold": 0.6900000000000002,
+  "config": {
+    "filters": "[32, 64, 64, 96]",
+    "kernels": "[3, 3, 3, 3]",
+    "dense": "32",
+    "lr": "0.0001",
+    "dropout": "0.4",
+    "l2": "0.0001",
+    "batch": "32",
+    "epochs": "250",
+    "cw": "{0: 1.0, 1: 1.2}",
+    "note": "V64 + LR=1e-4 (finer convergence on best arch)"
+  }
+}

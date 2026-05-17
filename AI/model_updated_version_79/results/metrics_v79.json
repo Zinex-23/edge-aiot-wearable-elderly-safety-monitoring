@@ -1,0 +1,22 @@
+{
+  "version": 79,
+  "accuracy": 0.914179104477612,
+  "precision": 0.8992805755395683,
+  "recall": 0.9328358208955224,
+  "f1": 0.9157509157509157,
+  "false_alarm_rate": 0.1044776119402985,
+  "miss_rate": 0.06716417910447761,
+  "best_threshold": 0.6700000000000002,
+  "config": {
+    "filters": "[32, 64, 64, 96]",
+    "kernels": "[3, 3, 3, 3]",
+    "dense": "48",
+    "lr": "0.0003",
+    "dropout": "0.4",
+    "l2": "0.0001",
+    "batch": "32",
+    "epochs": "200",
+    "cw": "{0: 1.0, 1: 1.2}",
+    "note": "V64 + Dense=48 (more classification capacity)"
+  }
+}

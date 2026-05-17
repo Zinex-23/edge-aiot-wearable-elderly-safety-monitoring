@@ -63,6 +63,7 @@ import com.aifd.data.HealthStatus
 import com.aifd.data.UserRole
 import com.aifd.ui.components.DeviceCard
 import com.aifd.ui.components.StatCard
+import com.aifd.ui.components.aifd.AifdHealthMetricCard
 import com.aifd.ui.localization.AppLocalizations
 import com.aifd.ui.theme.AIFDTheme
 import com.aifd.ui.theme.AIFDThemeExt
@@ -208,39 +209,28 @@ private fun HomeScreenContent(
         }
 
 
-        val hrStatusColor = when (healthData?.heartRateStatus) {
-            HealthStatus.HIGH -> MaterialTheme.colorScheme.error
-            HealthStatus.LOW -> AIFDThemeExt.colors.warning
-            else -> AIFDThemeExt.colors.safe
-        }
-        StatCard(
-            icon = Icons.Default.Favorite,
-            iconTint = MaterialTheme.colorScheme.error,
-            iconBackground = MaterialTheme.colorScheme.errorContainer,
-            label = strings.heartRate,
-            value = healthData?.heartRate?.toString() ?: "--",
-            unit = "bpm",
-            statusText = healthData?.heartRateStatus?.name?.lowercase()?.replaceFirstChar { it.uppercase() }
-                ?: strings.unknown,
-            statusColor = hrStatusColor,
-            onClick = onNavigateToMonitoring
+        AifdHealthMetricCard(
+            icon         = Icons.Default.Favorite,
+            label        = strings.heartRate,
+            value        = healthData?.heartRate?.toString() ?: "--",
+            unit         = "bpm",
+            status       = healthData?.heartRateStatus,
+            statusLabel  = healthData?.heartRateStatus?.name?.lowercase()
+                ?.replaceFirstChar { it.uppercase() } ?: strings.unknown,
+            accentColor  = MaterialTheme.colorScheme.error,
+            onClick      = onNavigateToMonitoring
         )
 
-        val spO2StatusColor = when (healthData?.spO2Status) {
-            HealthStatus.LOW -> AIFDThemeExt.colors.warning
-            else -> AIFDThemeExt.colors.safe
-        }
-        StatCard(
-            icon = Icons.Default.Favorite,
-            iconTint = MaterialTheme.colorScheme.primary,
-            iconBackground = MaterialTheme.colorScheme.primaryContainer,
-            label = strings.bloodOxygen,
-            value = healthData?.spO2?.toString() ?: "--",
-            unit = "%",
-            statusText = healthData?.spO2Status?.name?.lowercase()?.replaceFirstChar { it.uppercase() }
-                ?: strings.unknown,
-            statusColor = spO2StatusColor,
-            onClick = onNavigateToMonitoring
+        AifdHealthMetricCard(
+            icon         = Icons.Default.Favorite,
+            label        = strings.bloodOxygen,
+            value        = healthData?.spO2?.toString() ?: "--",
+            unit         = "%",
+            status       = healthData?.spO2Status,
+            statusLabel  = healthData?.spO2Status?.name?.lowercase()
+                ?.replaceFirstChar { it.uppercase() } ?: strings.unknown,
+            accentColor  = MaterialTheme.colorScheme.primary,
+            onClick      = onNavigateToMonitoring
         )
 
 

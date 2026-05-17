@@ -69,13 +69,17 @@ fun LineChart(
     // Reset selection whenever the dataset changes
     LaunchedEffect(data) { selectedIndex = null }
 
-    // Y scale: round to nearest step so scale stays stable as data fluctuates
+    // Y scale: top edge = EXACTLY the max value so the largest point sits flush against the top
+    // (area gradient then fills the full chart height → looks "fat"). Bottom is rounded down to a
+    // step and clamped so we always have ≥1 step of visible height even on flat data.
     val positives = data.filter { it > 0 }
     val rawMax    = positives.maxOrNull() ?: 100
     val rawMin    = positives.minOrNull() ?: 0
     val step      = if (rawMax > 20) 5 else 1
-    val yMax      = (((rawMax + step - 1) / step) * step).toFloat()   // ceil to step
-    val yMin      = ((rawMin / step) * step).toFloat().coerceAtLeast(0f) // floor to step
+    val yMax      = rawMax.toFloat()                                   // exact → max point sits at top edge
+    val yMin      = ((rawMin / step) * step).toFloat()
+        .coerceAtMost((rawMax - step).toFloat())                       // ensure ≥1 step below max
+        .coerceAtLeast(0f)
     val yRange    = (yMax - yMin).coerceAtLeast(step.toFloat())
 
     // Pixel positions of each data point; null = zero-value bucket (gap)
@@ -122,24 +126,18 @@ fun LineChart(
         val cal     = Calendar.getInstance()
         val axisClr = android.graphics.Color.argb(155, 120, 120, 120)
 
-        // ── Y-axis: max label aligned with the actual data point Y ───────
+        // ── Y-axis: max label sits in the top padding zone, just above the max data line ──
         val axisPaint = NativePaint().apply {
             color     = axisClr
             textSize  = axisTextSz
             isAntiAlias = true
             textAlign = NativePaint.Align.LEFT
         }
-        // Y position where rawMax sits on the chart (same formula as point computation)
+        // With yMax = rawMax, maxDataY ≡ topPad (the largest point sits at the chart top edge).
         val maxDataY = topPad + chartH - ((rawMax.toFloat() - yMin) / yRange) * chartH
-        // Faint guide line so the horizontal alignment is visible
-        drawLine(
-            color       = lineColor.copy(alpha = 0.13f),
-            start       = Offset(leftPad, maxDataY),
-            end         = Offset(size.width - rightPad, maxDataY),
-            strokeWidth = 1.5f
-        )
-        // Label sits exactly at maxDataY (baseline offset ≈ half text height)
-        nc.drawText(rawMax.toString(), 2f, maxDataY + axisTextSz * 0.38f, axisPaint)
+        // Place label baseline 2px above the data line; ascender extends up into the topPad area.
+        val labelBaselineY = (maxDataY - 2f).coerceAtLeast(axisTextSz)
+        nc.drawText(rawMax.toString(), 2f, labelBaselineY, axisPaint)
 
         // ── X-axis: real-time labels (5 evenly spaced) ────────────────────
         if (timeRange != null) {
