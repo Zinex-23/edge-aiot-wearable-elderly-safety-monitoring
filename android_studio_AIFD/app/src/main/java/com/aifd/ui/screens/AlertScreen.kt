@@ -32,23 +32,22 @@ private const val COUNTDOWN_SECONDS = 15
 
 /**
  * Full-screen fall alert with countdown, "I'm Safe", and "Call for Help" actions.
+ * countdown is owned by BleForegroundService and observed via AlertViewModel — the screen
+ * only displays it to avoid a race condition from two independent countdown sources.
  */
 @Composable
 fun FallAlertScreen(
+    countdown: Int = COUNTDOWN_SECONDS,
     onDismissAsSafe: () -> Unit = {},
     onCallForHelp: () -> Unit = {},
     deviceName: String = "AIFD Wearable Pro"
 ) {
     val strings = AppLocalizations.strings
-    var countdown by remember { mutableIntStateOf(COUNTDOWN_SECONDS) }
     var isCallingHelp by remember { mutableStateOf(false) }
 
-    // Countdown timer
+    // Trigger callForHelp when service countdown reaches zero
     LaunchedEffect(countdown) {
-        if (countdown > 0 && !isCallingHelp) {
-            kotlinx.coroutines.delay(1000L)
-            countdown--
-        } else if (countdown <= 0 && !isCallingHelp) {
+        if (countdown <= 0 && !isCallingHelp) {
             isCallingHelp = true
             onCallForHelp()
         }

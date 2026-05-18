@@ -320,6 +320,7 @@ fun AppNavigation(
             composable(Screen.FallAlert.route) {
                 val context = LocalContext.current
                 val emergencyNumber = userProfile.caregiverPhone.ifBlank { "0702341350" }
+                val alertState by alertViewModel.uiState.collectAsState()
 
                 val callPermissionLauncher = rememberLauncherForActivityResult(
                     ActivityResultContracts.RequestPermission()
@@ -341,8 +342,9 @@ fun AppNavigation(
                         context.startActivity(intent)
                     }
                 }
-                
+
                 FallAlertScreen(
+                    countdown = alertState.countdown,
                     onDismissAsSafe = {
                         alertViewModel.dismissAsSafe()
                         deviceViewModel.cancelEmergencyCountdown() // Cancel service countdown

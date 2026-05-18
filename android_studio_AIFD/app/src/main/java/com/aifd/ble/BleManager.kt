@@ -30,12 +30,13 @@ import kotlin.text.Charsets
  *
  * ESP32 BLE Protocol:
  * - Service UUID: 4fafc201-1fb5-459e-8fcc-c5c9c331914b
- * - Status Characteristic (notify): beb5483e-36e1-4688-b7f5-ea07361b26a8
- *   Format: "prediction,status_code,fall_prob,non_fall_prob"
- * - Accel Characteristic (notify): 7b809f11-63f0-4dca-8e4d-2b4e8384e7c1
- *   Format: "ax,ay,az"
- * - Gyro Characteristic (notify): f9b2c417-1d15-4ad4-9b52-b94aa0f76b03
- *   Format: "gx,gy,gz"
+ * - ALERT Characteristic (notify): beb5483e-36e1-4688-b7f5-ea07361b26a8
+ *   Format: "ALERT,seq,ts_sec,fall,status_code,fall_prob,non_fall_prob"
+ *           "SAFE,seq,ts_sec"  (device button pressed — cancel countdown)
+ * - VITALS Characteristic (notify): 7b809f11-63f0-4dca-8e4d-2b4e8384e7c1
+ *   Format: "BATCH,seq,hr0|hr1|hr2|hr3|hr4,spo2_0|...|spo2_4,ts0|...|ts4"
+ * - CONTROL Characteristic (write): f9b2c417-1d15-4ad4-9b52-b94aa0f76b03
+ *   Write "READY" to open data channel; device replies "ACK:READY"
  */
 class BleManager(private val context: Context) {
 
@@ -95,6 +96,10 @@ class BleManager(private val context: Context) {
 
     private val _fallDetected = MutableSharedFlow<FallStatus>(replay = 0, extraBufferCapacity = 1)
     val fallDetected: SharedFlow<FallStatus> = _fallDetected.asSharedFlow()
+
+    // Emitted when device sends SAFE packet (button pressed on device during fall alert)
+    private val _safeReceived = MutableSharedFlow<Unit>(replay = 0, extraBufferCapacity = 1)
+    val safeReceived: SharedFlow<Unit> = _safeReceived.asSharedFlow()
 
     private val _nearbyDevices = MutableStateFlow<List<ScannedDevice>>(emptyList())
     val nearbyDevices = _nearbyDevices.asStateFlow()
@@ -560,28 +565,38 @@ class BleManager(private val context: Context) {
     // 4. DATA PARSING — Matches ESP32 firmware CSV format
     // =====================================================================
 
-    /** "ALERT,seq,ts,fall,status_code,fall_prob,non_fall_prob" */
+    /** Parses ALERT and SAFE packets from the ALERT characteristic. */
     private fun parseAlertPayload(payload: String) {
         val parts = payload.split(",")
+        if (parts.isEmpty()) return
+
+        // SAFE,seq,ts_sec — device button pressed, cancel countdown
+        if (parts[0] == "SAFE") {
+            Log.i(TAG, "SAFE packet received from device — cancelling countdown")
+            _safeReceived.tryEmit(Unit)
+            return
+        }
+
+        // ALERT,seq,ts_sec,fall,status_code,fall_prob,non_fall_prob
         if (parts.size != 7 || parts[0] != "ALERT") return
         try {
             val sequence = parts[1].trim().toInt()
-            val timestampSec = parts[2].trim().toLong()
             val prediction = parts[3].trim()
             val statusCode = parts[4].trim().toInt()
             val fallProb = parts[5].trim().toFloat()
             val nonFallProb = parts[6].trim().toFloat()
+            // Use phone wall-clock time — device uptime (parts[2]) is not UTC
+            val timestampMs = System.currentTimeMillis()
 
             Log.d(TAG, "Alert: $prediction ($fallProb) seq=$sequence")
 
             if (prediction == "fall") {
                 Log.w(TAG, "⚠️ FALL DETECTED! prob=$fallProb")
-                val fall = FallStatus(sequence, timestampSec, prediction, statusCode, fallProb, nonFallProb)
+                val fall = FallStatus(sequence, timestampMs / 1000, prediction, statusCode, fallProb, nonFallProb)
                 _fallDetected.tryEmit(fall)
                 saveFallEvent(fall)
-                
-                // Trigger both vibration and sound
-                vibrateDevice() 
+
+                vibrateDevice()
                 playAlertSound()
             }
         } catch (e: Exception) {
@@ -617,8 +632,9 @@ class BleManager(private val context: Context) {
             val spo2Strings = parts[3].split("|")
             val tsStrings = parts[4].split("|")
 
-            val heartRates = hrStrings.map { if (it.trim() == "255") 0 else it.trim().toInt() }
-            val spo2s = spo2Strings.map { if (it.trim() == "255") 0 else it.trim().toInt() }
+            // 255 = sensor not ready / invalid — map to -1 so callers can filter it out
+            val heartRates = hrStrings.map { if (it.trim() == "255") -1 else it.trim().toInt() }
+            val spo2s = spo2Strings.map { if (it.trim() == "255") -1 else it.trim().toInt() }
             val timestamps = tsStrings.map { it.trim().toLong() }
 
             val batch = VitalsBatch(sequence, heartRates, spo2s, timestamps)
@@ -628,12 +644,13 @@ class BleManager(private val context: Context) {
             
             // Update real-time sensor data with the latest sample in the batch
             if (heartRates.isNotEmpty()) {
-                val latestHR = heartRates.last()
-                val latestSPO2 = spo2s.last()
-                if (latestHR > 0 || latestSPO2 > 0) {
+                // Use last valid (non-negative) reading; -1 means sensor not ready
+                val latestHR   = heartRates.lastOrNull { it >= 0 } ?: -1
+                val latestSPO2 = spo2s.lastOrNull { it >= 0 } ?: -1
+                if (latestHR >= 0 || latestSPO2 >= 0) {
                     _sensorData.value = SensorData(
-                        heartRate = latestHR,
-                        spo2 = latestSPO2,
+                        heartRate = if (latestHR >= 0) latestHR else 0,
+                        spo2      = if (latestSPO2 >= 0) latestSPO2 else 0,
                         timestamp = System.currentTimeMillis()
                     )
                     saveSensorData(latestHR, latestSPO2)
@@ -650,17 +667,17 @@ class BleManager(private val context: Context) {
         if (username == "000") return // Don't save for demo account
 
         prefs.edit {
-            if (hr > 0) putInt("last_heart_rate", hr)
-            if (spo2 > 0) putInt("last_spo2", spo2)
+            if (hr >= 0) putInt("last_heart_rate", hr)
+            if (spo2 >= 0) putInt("last_spo2", spo2)
             putLong("last_timestamp", System.currentTimeMillis())
-            
+
             // Update history strings (keep last 24 points)
-            if (hr > 0) {
+            if (hr >= 0) {
                 val hrHistory = (prefs.getString("hr_history", "") ?: "").split(",").filter { it.isNotEmpty() }
                 val newHrHistory = (hrHistory.takeLast(23) + hr.toString()).joinToString(",")
                 putString("hr_history", newHrHistory)
             }
-            if (spo2 > 0) {
+            if (spo2 >= 0) {
                 val spo2History = (prefs.getString("spo2_history", "") ?: "").split(",").filter { it.isNotEmpty() }
                 val newSpo2History = (spo2History.takeLast(23) + spo2.toString()).joinToString(",")
                 putString("spo2_history", newSpo2History)
@@ -723,9 +740,34 @@ class BleManager(private val context: Context) {
     }
 
     private fun vibrateDevice() {
-        // Assume there is a vibration logic already or we can add it here
-        // If there's an existing vibrate() function, we use it.
         _isVibrating.value = true
         handler.postDelayed({ _isVibrating.value = false }, 3000)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vm = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE)
+                        as? android.os.VibratorManager
+                vm?.defaultVibrator?.vibrate(
+                    android.os.VibrationEffect.createWaveform(
+                        longArrayOf(0, 500, 200, 500, 200, 500), -1
+                    )
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE)
+                        as? android.os.Vibrator
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    vibrator?.vibrate(
+                        android.os.VibrationEffect.createWaveform(
+                            longArrayOf(0, 500, 200, 500, 200, 500), -1
+                        )
+                    )
+                } else {
+                    @Suppress("DEPRECATION")
+                    vibrator?.vibrate(longArrayOf(0, 500, 200, 500, 200, 500), -1)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "vibrateDevice error: ${e.message}")
+        }
     }
 }

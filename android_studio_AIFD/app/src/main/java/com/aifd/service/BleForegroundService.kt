@@ -174,6 +174,14 @@ class BleForegroundService : Service() {
             }
         }
 
+        // Device button "I'm Safe" — cancel countdown without waiting for user to tap app
+        serviceScope.launch {
+            bleManager.safeReceived.collect {
+                Log.i(TAG, "SAFE received from device — cancelling countdown")
+                cancelEmergencyCountdown()
+            }
+        }
+
         // Periodic safety-net reconnect (every 60s) — BleManager handles short-term backoff;
         // this catches the case where there is no bonded device yet or after long idle periods.
         autoReconnectJob = serviceScope.launch {

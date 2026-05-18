@@ -38,6 +38,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.5"
@@ -49,7 +50,19 @@ android {
     }
 }
 
+// Direct Gradle toolchain to system JDK 17 so AGP's JdkImageTransform uses
+// /usr/lib/jvm/java-17-openjdk-amd64/bin/jlink instead of the snap JBR's
+// (snap JBR has no jmods → jlink fails; system JDK 17 has 70 jmods).
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
 dependencies {
+    // Logging
+    implementation("com.jakewharton.timber:timber:5.0.1")
+
     // Core
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
