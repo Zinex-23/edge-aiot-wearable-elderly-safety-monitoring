@@ -3,11 +3,30 @@
 Firmware now uses one BLE service with:
 
 - Service UUID: `4fafc201-1fb5-459e-8fcc-c5c9c331914b`
-- Fall alert characteristic: `beb5483e-36e1-4688-b7f5-ea07361b26a8`
-- Vitals batch characteristic: `7b809f11-63f0-4dca-8e4d-2b4e8384e7c1`
-- Control characteristic: `f9b2c417-1d15-4ad4-9b52-b94aa0f76b03`
+- ALERT characteristic   (notify, read): `beb5483e-36e1-4688-b7f5-ea07361b26a8`
+  carries **`ALERT`** and **`SAFE`** packets
+- VITALS characteristic  (notify, read): `7b809f11-63f0-4dca-8e4d-2b4e8384e7c1`
+  carries **`BATCH`** (HR/SpO2) and **`BMI`** (BMI160 live peak) packets
+- CONTROL characteristic (read, write):  `f9b2c417-1d15-4ad4-9b52-b94aa0f76b03`
+  client writes `READY` after subscribe; device replies `ACK:READY`
 
-The old continuous IMU telemetry stream is no longer used for the client protocol.
+The old continuous IMU telemetry stream is no longer used. Live BMI160 activity
+is summarised by the `BMI` packet emitted every 5 s (peak acc + peak gyro).
+
+## Packet data-source legend
+
+| Packet | Source                                  | Real / Simulated |
+| ------ | --------------------------------------- | ---------------- |
+| ALERT  | BMI160 + TFLite V84 fall pipeline       | **Real**         |
+| SAFE   | Hardware button (GPIO 10) during alarm  | **Real**         |
+| BMI    | BMI160 sensor peak in last window       | **Real**         |
+| BATCH  | HR / SpO2 generator (`readHrSample()` / | Simulated *      |
+|        | `readSpo2Sample()` in `src/main.cpp`)   |                  |
+
+\* `255` is the documented sentinel for "sensor not ready" — the Android parser
+maps it to `-1` so the UI never displays a fake reading. When a real PPG driver
+is integrated, only the two `readHrSample()` / `readSpo2Sample()` functions need
+to change; the BLE payload contract stays identical.
 
 ## 1. Connection model
 
@@ -109,16 +128,54 @@ Semantics:
 - Each batch contains exactly `5` samples.
 - A batch is emitted every `25s`.
 
-## 5. Missing data
+## 5. SAFE payload (device button)
 
-Current firmware does not yet contain a real HR/SpO2 sensor driver.
+Format:
 
-Until that sensor code is integrated:
+```text
+SAFE,<sequence>,<timestamp_sec>
+```
 
-- HR may be `255`
-- SpO2 may be `255`
+Emitted only when the user presses the device button **during an active fall
+alarm**. Resets the on-device alarm and tells the app to cancel its 15 s
+emergency countdown (equivalent to the user pressing "I'm Safe" in the app).
 
-Client should interpret `255` as `invalid/unavailable`, not as a real physiological value.
+## 6. BMI live snapshot payload
+
+Format:
+
+```text
+BMI,<sequence>,<timestamp_sec>,<peak_acc_g>,<peak_gyro_dps>,<active>
+```
+
+Example:
+
+```text
+BMI,42,123,1.034,5.7,0
+BMI,43,128,3.210,287.4,1
+```
+
+Fields:
+
+- `sequence`: monotonically increasing snapshot id
+- `timestamp_sec`: device uptime seconds
+- `peak_acc_g`: max |acc| magnitude over the latest 2 s inference window, in g
+- `peak_gyro_dps`: max |gyro| magnitude over the latest 2 s window, in dps
+- `active`: `1` if the window crossed the activity threshold
+  (acc > 2 g OR gyro > 50 dps), `0` otherwise
+
+Cadence: every **5 s**. This is REAL BMI160 data — useful for showing the
+caregiver that the device is alive and that motion is being observed.
+
+## 7. Missing data semantics
+
+Current firmware does not contain a real HR/SpO2 sensor driver, so
+`BATCH` HR and SpO2 values come from a simulator. The simulator is
+deliberately well-behaved (60–100 bpm, 94–100 %).
+
+If the future driver returns "sensor not ready" it MUST emit `255`. The
+Android parser maps `255 → -1` and the UI hides that sample. No other
+client/firmware change is required when the real driver lands.
 
 ## 6. Suggested parser logic
 

@@ -82,6 +82,19 @@ class BleManager(private val context: Context) {
         val timestamp: Long = System.currentTimeMillis()
     )
 
+    /**
+     * Live BMI160 peak snapshot (real sensor data).
+     * Emitted every ~5s while connected.
+     */
+    data class BmiSnapshot(
+        val sequence: Int,
+        val timestampSec: Long,
+        val peakAccG: Float,
+        val peakGyroDps: Float,
+        val active: Boolean,
+        val receivedAtMs: Long = System.currentTimeMillis()
+    )
+
     data class ScannedDevice(val name: String, val address: String, val rssi: Int)
 
     // ── Flows ────────────────────────────────────────────────────────────
@@ -93,6 +106,10 @@ class BleManager(private val context: Context) {
 
     private val _vitalsBatch = MutableSharedFlow<VitalsBatch>(replay = 0, extraBufferCapacity = 1)
     val vitalsBatch: SharedFlow<VitalsBatch> = _vitalsBatch.asSharedFlow()
+
+    // Latest BMI160 snapshot — StateFlow so subscribers always see the current value
+    private val _bmiSnapshot = MutableStateFlow<BmiSnapshot?>(null)
+    val bmiSnapshot = _bmiSnapshot.asStateFlow()
 
     private val _fallDetected = MutableSharedFlow<FallStatus>(replay = 0, extraBufferCapacity = 1)
     val fallDetected: SharedFlow<FallStatus> = _fallDetected.asSharedFlow()
@@ -567,40 +584,30 @@ class BleManager(private val context: Context) {
 
     /** Parses ALERT and SAFE packets from the ALERT characteristic. */
     private fun parseAlertPayload(payload: String) {
-        val parts = payload.split(",")
-        if (parts.isEmpty()) return
-
-        // SAFE,seq,ts_sec — device button pressed, cancel countdown
-        if (parts[0] == "SAFE") {
-            Log.i(TAG, "SAFE packet received from device — cancelling countdown")
-            _safeReceived.tryEmit(Unit)
-            return
-        }
-
-        // ALERT,seq,ts_sec,fall,status_code,fall_prob,non_fall_prob
-        if (parts.size != 7 || parts[0] != "ALERT") return
-        try {
-            val sequence = parts[1].trim().toInt()
-            val prediction = parts[3].trim()
-            val statusCode = parts[4].trim().toInt()
-            val fallProb = parts[5].trim().toFloat()
-            val nonFallProb = parts[6].trim().toFloat()
-            // Use phone wall-clock time — device uptime (parts[2]) is not UTC
-            val timestampMs = System.currentTimeMillis()
-
-            Log.d(TAG, "Alert: $prediction ($fallProb) seq=$sequence")
-
-            if (prediction == "fall") {
-                Log.w(TAG, "⚠️ FALL DETECTED! prob=$fallProb")
-                val fall = FallStatus(sequence, timestampMs / 1000, prediction, statusCode, fallProb, nonFallProb)
-                _fallDetected.tryEmit(fall)
-                saveFallEvent(fall)
-
-                vibrateDevice()
-                playAlertSound()
+        when (BlePacketParser.classify(payload)) {
+            BlePacketParser.PacketKind.SAFE -> {
+                BlePacketParser.parseSafe(payload) ?: run {
+                    Log.w(TAG, "SAFE malformed: $payload"); return
+                }
+                Log.i(TAG, "SAFE packet received from device — cancelling countdown")
+                _safeReceived.tryEmit(Unit)
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "parseAlertPayload error: ${e.message}")
+            BlePacketParser.PacketKind.ALERT -> {
+                val raw = BlePacketParser.parseAlert(payload) ?: run {
+                    Log.w(TAG, "ALERT malformed: $payload"); return
+                }
+                // Override device uptime with phone wall-clock seconds for UI consistency
+                val fall = raw.copy(timestampSec = System.currentTimeMillis() / 1000)
+                Log.d(TAG, "Alert: ${fall.prediction} (${fall.fallProb}) seq=${fall.sequence}")
+                if (fall.prediction == "fall") {
+                    Log.w(TAG, "⚠️ FALL DETECTED! prob=${fall.fallProb}")
+                    _fallDetected.tryEmit(fall)
+                    saveFallEvent(fall)
+                    vibrateDevice()
+                    playAlertSound()
+                }
+            }
+            else -> Log.w(TAG, "Unknown ALERT-char packet: $payload")
         }
     }
 
@@ -622,31 +629,22 @@ class BleManager(private val context: Context) {
         }
     }
 
-    /** "BATCH,seq,HRs,SPO2s,TSs" where values are pipe-separated */
+    /**
+     * VITALS characteristic carries two packet types — dispatched by prefix:
+     *   BATCH,...  → HR/SpO2 batch (5 samples, every 25s) — simulated HR/SpO2 today
+     *   BMI,...    → live BMI160 peak snapshot (every 5s)  — REAL sensor data
+     */
     private fun parseVitalsPayload(payload: String) {
-        val parts = payload.split(",")
-        if (parts.size != 5 || parts[0] != "BATCH") return
-        try {
-            val sequence = parts[1].trim().toInt()
-            val hrStrings = parts[2].split("|")
-            val spo2Strings = parts[3].split("|")
-            val tsStrings = parts[4].split("|")
-
-            // 255 = sensor not ready / invalid — map to -1 so callers can filter it out
-            val heartRates = hrStrings.map { if (it.trim() == "255") -1 else it.trim().toInt() }
-            val spo2s = spo2Strings.map { if (it.trim() == "255") -1 else it.trim().toInt() }
-            val timestamps = tsStrings.map { it.trim().toLong() }
-
-            val batch = VitalsBatch(sequence, heartRates, spo2s, timestamps)
-            Log.d(TAG, "Vitals batch received, seq=$sequence, count=${heartRates.size}")
-            
-            _vitalsBatch.tryEmit(batch)
-            
-            // Update real-time sensor data with the latest sample in the batch
-            if (heartRates.isNotEmpty()) {
-                // Use last valid (non-negative) reading; -1 means sensor not ready
-                val latestHR   = heartRates.lastOrNull { it >= 0 } ?: -1
-                val latestSPO2 = spo2s.lastOrNull { it >= 0 } ?: -1
+        when (BlePacketParser.classify(payload)) {
+            BlePacketParser.PacketKind.BATCH -> {
+                val batch = BlePacketParser.parseBatch(payload) ?: run {
+                    Log.w(TAG, "BATCH malformed: $payload"); return
+                }
+                Log.d(TAG, "Vitals batch received, seq=${batch.sequence}, count=${batch.heartRates.size}")
+                _vitalsBatch.tryEmit(batch)
+                // Update real-time sensor data with the latest VALID reading in this batch
+                val latestHR   = batch.heartRates.lastOrNull { it >= 0 } ?: -1
+                val latestSPO2 = batch.spo2s.lastOrNull { it >= 0 } ?: -1
                 if (latestHR >= 0 || latestSPO2 >= 0) {
                     _sensorData.value = SensorData(
                         heartRate = if (latestHR >= 0) latestHR else 0,
@@ -656,8 +654,14 @@ class BleManager(private val context: Context) {
                     saveSensorData(latestHR, latestSPO2)
                 }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "parseVitalsPayload error: ${e.message}")
+            BlePacketParser.PacketKind.BMI -> {
+                val snap = BlePacketParser.parseBmi(payload) ?: run {
+                    Log.w(TAG, "BMI malformed: $payload"); return
+                }
+                Log.d(TAG, "BMI: acc=${snap.peakAccG}g gyro=${snap.peakGyroDps}dps active=${snap.active}")
+                _bmiSnapshot.value = snap
+            }
+            else -> Log.w(TAG, "Unknown VITALS packet: $payload")
         }
     }
 

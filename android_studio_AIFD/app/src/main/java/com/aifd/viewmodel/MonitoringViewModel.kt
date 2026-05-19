@@ -32,7 +32,8 @@ data class MonitoringUiState(
     val currentSpO2: Int = 0,
     val healthData: HealthData? = null,
     val weeklySteps: List<DailySteps> = emptyList(),
-    val isConnected: Boolean = false
+    val isConnected: Boolean = false,
+    val bmiSnapshot: BleManager.BmiSnapshot? = null
 )
 
 class MonitoringViewModel(application: Application) : AndroidViewModel(application) {
@@ -181,6 +182,13 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
         viewModelScope.launch {
             ble.bleState.collect { state ->
                 _uiState.update { it.copy(isConnected = state is BleManager.BleState.Connected) }
+            }
+        }
+
+        // Live BMI160 snapshot (REAL data from edge)
+        viewModelScope.launch {
+            ble.bmiSnapshot.collect { snap ->
+                if (snap != null) _uiState.update { it.copy(bmiSnapshot = snap) }
             }
         }
     }
