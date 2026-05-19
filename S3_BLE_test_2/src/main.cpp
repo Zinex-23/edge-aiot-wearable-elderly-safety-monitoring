@@ -95,6 +95,7 @@ static const float STILLNESS_GYRO_MAX       = 100.0f;
 static const int      FALL_WATCH_WINDOWS       = 5;
 static const uint32_t FALL_STILL_DURATION_MS   = 5000;  // cần nằm im liên tục bao lâu
 static const uint32_t FALL_MONITOR_TIMEOUT_MS  = 10000; // tối đa bao lâu để theo dõi sau fall
+static const uint32_t AI_WINDOW_DURATION_MS    = 6000;  // AI chạy tối đa 6s sau khi có peak (3 windows x 2s)
 
 // =====================================================================
 // BLE UUIDs
@@ -510,12 +511,16 @@ static bool initModel() {
 // highImpactSeen:   true if any window in current streak had peak > HIGH_IMPACT thresholds.
 // activityActiveOut: true if THIS window crossed the activity threshold.
 // candidateActiveOut: true if THIS window crossed the candidate threshold.
+// aiWindowActive:   true while within the 5s AI window opened by a peak.
+// aiWindowStartMs:  millis() when the current AI window was opened.
 static bool runInferenceOnSnapshot(const ImuSample *snap,
-                                   float &fallProb,
-                                   int   &activityCount,
-                                   bool  &highImpactSeen,
-                                   bool  &activityActiveOut,
-                                   bool  &candidateActiveOut)
+                                   float    &fallProb,
+                                   int      &activityCount,
+                                   bool     &highImpactSeen,
+                                   bool     &activityActiveOut,
+                                   bool     &candidateActiveOut,
+                                   bool     &aiWindowActive,
+                                   uint32_t &aiWindowStartMs)
 {
     fallProb = 0.0f;
     if (!modelOk) return false;
@@ -573,6 +578,26 @@ static bool runInferenceOnSnapshot(const ImuSample *snap,
         Serial.printf("[IMPACT] peak_gyro=%.1fdps < %.1fdps — reject\n", maxGyr, FALL_IMPACT_GYRO_MIN);
         return true;
     }
+
+    // ── AI WINDOW — chạy tối đa AI_WINDOW_DURATION_MS sau khi có peak ──────────
+    // Peak = tất cả các gate đều pass. Nếu hết 5s mà chưa có fall → tắt AI,
+    // reset highImpactSeen để yêu cầu peak mới mới mở lại.
+    if (!aiWindowActive) {
+        aiWindowActive  = true;
+        aiWindowStartMs = millis();
+        Serial.println("[AI] Window opened — AI active for 5s");
+    }
+    uint32_t aiElapsed = millis() - aiWindowStartMs;
+    if (aiElapsed >= AI_WINDOW_DURATION_MS) {
+        aiWindowActive = false;
+        highImpactSeen = false; // cần peak mới để mở lại AI
+        Serial.printf("[AI] Window expired (%lums) — no fall, waiting for next peak\n",
+                      (unsigned long)aiElapsed);
+        return true; // fallProb = 0
+    }
+    Serial.printf("[AI] Window active %lums / %lums\n",
+                  (unsigned long)aiElapsed, (unsigned long)AI_WINDOW_DURATION_MS);
+    // ─────────────────────────────────────────────────────────────────────────
 
     for (int t = 0; t < kWindowSize; t++) {
         inputTensor->data.int8[t * kFeatureCount + 0] = quantizeInput(snap[t].ax);
@@ -742,9 +767,11 @@ static void taskSampling(void *pvParams) {
 // TASK 2: INFERENCE — Core 1, priority 1
 // =====================================================================
 static void taskInference(void *pvParams) {
-    static uint32_t inferenceCount = 0;
-    static int      activityCount  = 0;
-    static bool     highImpactSeen = false;
+    static uint32_t inferenceCount  = 0;
+    static int      activityCount   = 0;
+    static bool     highImpactSeen  = false;
+    static bool     aiWindowActive  = false;
+    static uint32_t aiWindowStartMs = 0;
 
     while (true) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -754,14 +781,19 @@ static void taskInference(void *pvParams) {
         xSemaphoreGive(gImuMutex);
 
         // While alarm active: skip inference but still update LED (keeps LED_ALARM)
-        if (gFallAlertActive) { updateLedFromPipeline(false, 0, false, false); continue; }
+        if (gFallAlertActive) {
+            aiWindowActive = false; // đóng window khi alarm đang active
+            updateLedFromPipeline(false, 0, false, false);
+            continue;
+        }
 
         uint32_t t0 = millis();
-        float fallProb       = 0.0f;
-        bool  activityActive = false;
-        bool  candidateActive= false;
+        float fallProb        = 0.0f;
+        bool  activityActive  = false;
+        bool  candidateActive = false;
         bool ok = runInferenceOnSnapshot(gSnapshot, fallProb, activityCount,
-                                         highImpactSeen, activityActive, candidateActive);
+                                         highImpactSeen, activityActive, candidateActive,
+                                         aiWindowActive, aiWindowStartMs);
         uint32_t latencyMs = millis() - t0;
         inferenceCount++;
 
@@ -774,7 +806,15 @@ static void taskInference(void *pvParams) {
         bool stillnessNow = checkStillness(gSnapshot);
         updateFallStateMachine(fallProb, stillnessNow, activityActive,
                                gLastPeakAcc, gLastPeakGyro); // may trigger LED_ALARM
-        updateLedFromPipeline(activityActive, activityCount, candidateActive, isFall);
+
+        // Đóng AI window khi FSM đã nhận fall (FALL_WATCH / STILL_TIMING)
+        if (fallDetectState != FDS_IDLE) {
+            aiWindowActive = false;
+        }
+
+        // LED: hiện CANDIDATE khi AI window đang mở (dù window này không có peak)
+        updateLedFromPipeline(activityActive, activityCount,
+                              candidateActive || aiWindowActive, isFall);
     }
 }
 
@@ -885,7 +925,7 @@ void setup() {
                             1, &gInferenceTask, 1);
 
     // BLE setup — service registered before advertising (Android UUID filter requirement)
-    NimBLEDevice::init("S3_AIFD Wearable_test");
+    NimBLEDevice::init("S3_AIFD Wearable_test_2");
     NimBLEDevice::setPower(ESP_PWR_LVL_P9);
     NimBLEDevice::setSecurityAuth(BLE_SM_PAIR_AUTHREQ_BOND);
     gBleServer = NimBLEDevice::createServer();
@@ -914,7 +954,7 @@ void setup() {
     adv->start();
 
     setLedState(LED_IDLE);
-    Serial.println("[BOOT] Tasks started. Advertising as \"S3_AIFD Wearable_test\"");
+    Serial.println("[BOOT] Tasks started. Advertising as \"S3_AIFD Wearable_test_2\"");
 }
 
 void loop() {
