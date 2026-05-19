@@ -64,7 +64,7 @@ Model luôn nhận đúng 100 sample cách đều 20ms bất kể inference mấ
 
 | Scenario | Result | Output |
 | :--- | :---: | :--- |
-| SC_01 Advertising | ✅ PASS | `device="S3_AIFD Wearable_test"  server=OK  callbacks=BleServerCb` |
+| SC_01 Advertising | ✅ PASS | `device="S3_AIFD Wearable_test_2"  server=OK  callbacks=BleServerCb` |
 | SC_02 Service Init | ✅ PASS | `ALERT=OK  VITALS=OK  CONTROL=OK  ControlCb=attached  service.start()=done` |
 | SC_03 Data Notification | ✅ PASS | `ALERT.NOTIFY=enabled  VITALS.NOTIFY=enabled  advertising=active` |
 | SC_04 Bond Storage | ✅ PASS | `bond_store=OK  saved_peers=0  (first boot)` |

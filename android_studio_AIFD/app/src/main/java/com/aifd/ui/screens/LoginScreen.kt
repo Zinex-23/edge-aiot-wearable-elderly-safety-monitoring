@@ -1,31 +1,27 @@
 package com.aifd.ui.screens
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextFieldDefaults
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.aifd.data.CloudApi
 import com.aifd.ui.localization.AppLocalizations
 import com.aifd.ui.theme.AIFDTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -34,9 +30,42 @@ fun LoginScreen(
     onNavigateToRegister: () -> Unit = {}
 ) {
     val strings = AppLocalizations.strings
-    var username by rememberSaveable { mutableStateOf("dien572") }
-    var password by rememberSaveable { mutableStateOf("dien562003") }
-    var showError by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    var username    by rememberSaveable { mutableStateOf("") }
+    var password    by rememberSaveable { mutableStateOf("") }
+    var showPw      by rememberSaveable { mutableStateOf(false) }
+    var errorMsg    by remember { mutableStateOf("") }
+    var isLoading   by remember { mutableStateOf(false) }
+
+    fun doLogin() {
+        if (username.isBlank() || password.isBlank()) {
+            errorMsg = strings.invalidCredentials
+            return
+        }
+        if (username == "000" && password == "000") {
+            onLoginSuccess("000")
+            return
+        }
+        isLoading = true
+        errorMsg  = ""
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                CloudApi.login(username.trim(), password)
+            }
+            isLoading = false
+            if (result.ok) {
+                onLoginSuccess(result.userId)
+            } else {
+                errorMsg = when {
+                    result.error.contains("invalid", ignoreCase = true) -> strings.invalidCredentials
+                    result.error.contains("network", ignoreCase = true)  -> "Không có kết nối mạng, kiểm tra lại server"
+                    result.error.isNotBlank()                            -> result.error
+                    else                                                 -> strings.invalidCredentials
+                }
+            }
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -59,32 +88,35 @@ fun LoginScreen(
 
         OutlinedTextField(
             value = username,
-            onValueChange = {
-                username = it
-                showError = false
-            },
+            onValueChange = { username = it; errorMsg = "" },
             label = { Text(strings.username) },
             modifier = Modifier.fillMaxWidth(),
-            singleLine = true
+            singleLine = true,
+            enabled = !isLoading
         )
         Spacer(Modifier.height(12.dp))
         OutlinedTextField(
             value = password,
-            onValueChange = {
-                password = it
-                showError = false
-            },
+            onValueChange = { password = it; errorMsg = "" },
             label = { Text(strings.password) },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            colors = TextFieldDefaults.outlinedTextFieldColors()
+            visualTransformation = if (showPw) VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = {
+                IconButton(onClick = { showPw = !showPw }) {
+                    Icon(
+                        imageVector = if (showPw) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                        contentDescription = if (showPw) "Ẩn mật khẩu" else "Hiện mật khẩu"
+                    )
+                }
+            },
+            enabled = !isLoading
         )
 
-        if (showError) {
+        if (errorMsg.isNotBlank()) {
             Spacer(Modifier.height(12.dp))
             Text(
-                text = strings.invalidCredentials,
+                text = errorMsg,
                 color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.bodySmall
             )
@@ -92,24 +124,33 @@ fun LoginScreen(
 
         Spacer(Modifier.height(20.dp))
         Button(
-            onClick = {
-                if ((username == "dien572" && password == "dien562003") || (username == "000" && password == "000")) {
-                    onLoginSuccess(username)
-                } else {
-                    showError = true
-                }
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(54.dp)
+            onClick = { doLogin() },
+            modifier = Modifier.fillMaxWidth().height(54.dp),
+            enabled = !isLoading
         ) {
-            Text(strings.signIn, fontWeight = FontWeight.SemiBold)
+            if (isLoading) {
+                val spin = rememberInfiniteTransition(label = "login_spin")
+                val angle by spin.animateFloat(
+                    initialValue = 0f, targetValue = 360f,
+                    animationSpec = infiniteRepeatable(tween(700, easing = LinearEasing)),
+                    label = "angle"
+                )
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp).rotate(angle),
+                    tint = MaterialTheme.colorScheme.onPrimary
+                )
+            } else {
+                Text(strings.signIn, fontWeight = FontWeight.SemiBold)
+            }
         }
 
         Spacer(Modifier.height(16.dp))
-        androidx.compose.material3.TextButton(
+        TextButton(
             onClick = onNavigateToRegister,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !isLoading
         ) {
             Text(
                 text = strings.dontHaveAccount + strings.register,

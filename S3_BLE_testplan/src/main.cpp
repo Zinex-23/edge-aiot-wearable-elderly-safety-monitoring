@@ -97,7 +97,7 @@ class BleServerCb : public NimBLEServerCallbacks {
         gBleConnected = false;
         gBleReady     = false;
         s->startAdvertising();
-        Serial.println("[BLE] Client disconnected — re-advertising as \"S3_AIFD Wearable_test\"");
+        Serial.println("[BLE] Client disconnected — re-advertising as \"S3_AIFD Wearable_test_2\"");
     }
 };
 
@@ -528,7 +528,7 @@ static void test_ble_stack() {
     // If advertising starts before GATT service->start(), some Android versions reject the
     // UUID as "not yet in GATT table" and the scan filter never fires → device invisible.
     {
-        NimBLEDevice::init("S3_AIFD Wearable_test");
+        NimBLEDevice::init("S3_AIFD Wearable_test_2");
         NimBLEDevice::setPower(ESP_PWR_LVL_P9);
         // Enable Just-Works bonding (no passkey) so client address is persisted to NVS.
         // This allows auto-reconnect on next boot without re-pairing.
@@ -539,7 +539,7 @@ static void test_ble_stack() {
         bool ok = (gBleServer != nullptr);
         char msg[80];
         snprintf(msg, sizeof(msg),
-                 "device=\"S3_AIFD Wearable_test\"  server=%s  callbacks=BleServerCb  (advertising deferred to SC_03)",
+                 "device=\"S3_AIFD Wearable_test_2\"  server=%s  callbacks=BleServerCb  (advertising deferred to SC_03)",
                  ok ? "OK" : "NULL");
         reportScenario("SC_01", ok ? TS_PASS : TS_FAIL, msg);
     }

@@ -5,6 +5,8 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.IBinder
 import android.util.Log
 import androidx.core.content.edit
@@ -13,6 +15,7 @@ import androidx.lifecycle.viewModelScope
 import com.aifd.ble.BleManager
 import com.aifd.data.*
 import com.aifd.service.BleForegroundService
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,9 +23,16 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 
 enum class MetricTab { HEART_RATE, SPO2 }
 enum class TimeRange { LIVE, ONE_HOUR, TWENTY_FOUR_HOURS }
+
+enum class CloudLoadState { IDLE, LOADING, SUCCESS, ERROR }
 
 data class MonitoringUiState(
     val activeTab: MetricTab = MetricTab.HEART_RATE,
@@ -33,10 +43,23 @@ data class MonitoringUiState(
     val healthData: HealthData? = null,
     val weeklySteps: List<DailySteps> = emptyList(),
     val isConnected: Boolean = false,
-    val bmiSnapshot: BleManager.BmiSnapshot? = null
+    val bmiSnapshot: BleManager.BmiSnapshot? = null,
+    val cloudLoadState: CloudLoadState = CloudLoadState.IDLE,
+    val cloudError: String = ""
 )
 
 class MonitoringViewModel(application: Application) : AndroidViewModel(application) {
+
+    companion object {
+        private const val TAG = "MonitoringVM"
+        private const val PREFS = "aifd_prefs"
+        private const val KEY_CLOUD_1H_HR   = "cloud_1h_hr"
+        private const val KEY_CLOUD_1H_SPO2 = "cloud_1h_spo2"
+        private const val KEY_CLOUD_24H_HR   = "cloud_24h_hr"
+        private const val KEY_CLOUD_24H_SPO2 = "cloud_24h_spo2"
+        private const val REFRESH_1H_MS  = 5  * 60_000L   // 5 minutes
+        private const val REFRESH_24H_MS = 30 * 60_000L   // 30 minutes
+    }
 
     private val _uiState = MutableStateFlow(MonitoringUiState())
     val uiState: StateFlow<MonitoringUiState> = _uiState.asStateFlow()
@@ -44,16 +67,35 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
     private var service: BleForegroundService? = null
     private var isBound = false
     private var liveTickJob: Job? = null
+    private var cloudRefreshJob: Job? = null
 
-    // VitalsStore — persists historical bucket data for 1h/24h charts
+    // Local bucket store for LIVE chart
     private val vitalsStore = VitalsStore(application.applicationContext)
+
+    // Cloud cache from SharedPreferences (offline fallback)
+    private var cloud1hHr:   List<Int> = emptyList()
+    private var cloud1hSpo2: List<Int> = emptyList()
+    private var cloud24hHr:  List<Int> = emptyList()
+    private var cloud24hSpo2: List<Int> = emptyList()
+
+    // Track connected device MAC and userId
+    private var connectedDeviceMac: String = ""
+    private var currentUserId: String = ""
+
+    // Timestamps of last cloud fetches
+    private var lastFetch1hMs  = 0L
+    private var lastFetch24hMs = 0L
+
+    private val isoFmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).also {
+        it.timeZone = TimeZone.getTimeZone("UTC")
+    }
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             val localBinder = binder as? BleForegroundService.LocalBinder ?: return
             service = localBinder.getService()
             isBound = true
-            Log.i("MonitoringVM", "Service bound ✓")
+            Log.i(TAG, "Service bound ✓")
             observeBleData()
         }
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -64,10 +106,12 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
 
     init {
         val ctx = application.applicationContext
-        val prefs = ctx.getSharedPreferences("aifd_prefs", Context.MODE_PRIVATE)
-        val username = prefs.getString("username", "") ?: ""
+        val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        currentUserId = prefs.getString("username", "") ?: ""
 
-        if (username == "000") {
+        loadCloudCacheFromPrefs(prefs)
+
+        if (currentUserId == "000") {
             val mockHealth = MockDataProvider.createHealthData()
             _uiState.update {
                 it.copy(
@@ -84,11 +128,11 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
         val intent = Intent(ctx, BleForegroundService::class.java)
         ctx.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
 
-        // Tick to refresh chart buckets every second
         startLiveTick()
+        startCloudRefreshLoop()
     }
 
-    // ── Public actions ────────────────────────────────────────────────────
+    // ── Public actions ────────────────────────────────────────────────────────
 
     fun selectTab(tab: MetricTab) {
         _uiState.update { it.copy(activeTab = tab) }
@@ -98,9 +142,19 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
     fun selectTimeRange(range: TimeRange) {
         _uiState.update { it.copy(timeRange = range) }
         refreshChart()
+        // Trigger immediate cloud fetch if switching to 1h/24h and cache is stale
+        if (range == TimeRange.ONE_HOUR && isStale(lastFetch1hMs, REFRESH_1H_MS)) {
+            fetchCloudVitals("1h")
+        }
+        if (range == TimeRange.TWENTY_FOUR_HOURS && isStale(lastFetch24hMs, REFRESH_24H_MS)) {
+            fetchCloudVitals("24h")
+        }
     }
 
     fun resetForUser(username: String) {
+        currentUserId = username
+        lastFetch1hMs  = 0L
+        lastFetch24hMs = 0L
         if (username == "000") {
             val mockHealth = MockDataProvider.createHealthData()
             _uiState.value = MonitoringUiState(
@@ -119,16 +173,20 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
 
     fun clearVitalsData() {
         vitalsStore.clearAll()
+        cloud1hHr    = emptyList(); cloud1hSpo2  = emptyList()
+        cloud24hHr   = emptyList(); cloud24hSpo2 = emptyList()
+        lastFetch1hMs = 0L; lastFetch24hMs = 0L
         _uiState.update {
             it.copy(chartData = emptyList(), currentHR = 0, currentSpO2 = 0, healthData = null)
         }
-        getApplication<Application>().applicationContext
-            .getSharedPreferences("aifd_prefs", Context.MODE_PRIVATE).edit {
-                remove("monitoring_hr_live")
-                remove("monitoring_spo2_live")
-                remove("last_heart_rate")
-                remove("last_spo2")
-            }
+        val prefs = getApplication<Application>().applicationContext
+            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        prefs.edit {
+            remove("monitoring_hr_live"); remove("monitoring_spo2_live")
+            remove("last_heart_rate"); remove("last_spo2")
+            remove(KEY_CLOUD_1H_HR); remove(KEY_CLOUD_1H_SPO2)
+            remove(KEY_CLOUD_24H_HR); remove(KEY_CLOUD_24H_SPO2)
+        }
     }
 
     fun getStats(): Triple<Int, Int, Int> {
@@ -137,26 +195,37 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
         return Triple(data.average().toInt(), data.minOrNull() ?: 0, data.maxOrNull() ?: 0)
     }
 
-    // ── Internal ──────────────────────────────────────────────────────────
+    // ── BLE observation ───────────────────────────────────────────────────────
 
     private fun observeBleData() {
         val ble = service?.bleManager ?: return
-        val username = getApplication<Application>().applicationContext
-            .getSharedPreferences("aifd_prefs", Context.MODE_PRIVATE)
-            .getString("username", "") ?: ""
-        if (username == "000") return
+        if (currentUserId == "000") return
 
-        // Batch readings → VitalsStore (bucket history for charts)
+        // Capture device MAC from connection state
         viewModelScope.launch {
-            ble.vitalsBatch.collect { batch ->
-                batch.heartRates.zip(batch.spo2s).forEach { (hr, spo2) ->
-                    if (hr > 0 || spo2 > 0) vitalsStore.addReading(hr, spo2)
+            ble.bleState.collect { state ->
+                _uiState.update { it.copy(isConnected = state is BleManager.BleState.Connected) }
+                if (state is BleManager.BleState.Connected) {
+                    connectedDeviceMac = state.deviceAddress
                 }
             }
         }
 
-        // Single reading → update "Current" display IMMEDIATELY, same timing as HomeViewModel.
-        // This is the single source of truth for the live current value shown on both screens.
+        // Batch readings → local bucket store + cloud upload
+        viewModelScope.launch {
+            ble.vitalsBatch.collect { batch ->
+                // Dùng thời gian thực nhận batch — timestamp của ESP32 là relative boot time
+                val receivedAtIso = isoFmt.format(Date(System.currentTimeMillis()))
+                val hrAvg   = batch.heartRates.filter { it > 0 }.average().takeIf { !it.isNaN() }?.toInt()
+                val spo2Avg = batch.spo2s.filter { it > 0 }.average().takeIf { !it.isNaN() }?.toInt()
+                if (hrAvg != null || spo2Avg != null) {
+                    vitalsStore.addReading(hrAvg ?: 0, spo2Avg ?: 0)
+                    uploadVitalToCloud(hrAvg, spo2Avg, receivedAtIso)
+                }
+            }
+        }
+
+        // Single reading → update current display
         viewModelScope.launch {
             ble.sensorData.collect { data ->
                 if (data.heartRate == 0 && data.spo2 == 0) return@collect
@@ -171,21 +240,25 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
                         heartRateStatus = hrStatus(hr),
                         spO2            = spo2,
                         spO2Status      = spo2Status(spo2),
-                        lastUpdated     = java.util.Date()
+                        lastUpdated     = Date()
                     )
                     state.copy(currentHR = hr, currentSpO2 = spo2, healthData = newHealth)
                 }
             }
         }
 
-        // Connection state
+        // Fall detected → upload to cloud
         viewModelScope.launch {
-            ble.bleState.collect { state ->
-                _uiState.update { it.copy(isConnected = state is BleManager.BleState.Connected) }
+            ble.fallDetected.collect { fallStatus ->
+                uploadFallEventToCloud(
+                    type     = "fall_auto",
+                    fallProb = fallStatus.fallProb.toDouble(),
+                    tsMs     = fallStatus.timestampSec * 1000L
+                )
             }
         }
 
-        // Live BMI160 snapshot (REAL data from edge)
+        // BMI snapshot
         viewModelScope.launch {
             ble.bmiSnapshot.collect { snap ->
                 if (snap != null) _uiState.update { it.copy(bmiSnapshot = snap) }
@@ -193,22 +266,209 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    /** Refreshes chart bucket data every second. Current values are NOT updated here. */
+    // ── Cloud upload ──────────────────────────────────────────────────────────
+
+    private fun uploadVitalToCloud(hr: Int?, spo2: Int?, tsIso: String) {
+        if (currentUserId.isBlank() || currentUserId == "000") {
+            Log.d(TAG, "uploadVital skipped: userId='$currentUserId'")
+            return
+        }
+        if (!isNetworkAvailable()) {
+            Log.d(TAG, "uploadVital skipped: no network")
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val mac = connectedDeviceMac.ifBlank { "unknown" }
+            val result = CloudApi.postVital(
+                deviceId     = mac,
+                userId       = currentUserId,
+                heartRate    = hr,
+                spo2         = spo2,
+                timestampIso = tsIso
+            )
+            Log.d(TAG, "uploadVital hr=$hr spo2=$spo2 → ok=${result.ok} err=${result.error}")
+        }
+    }
+
+    private fun uploadFallEventToCloud(type: String, fallProb: Double?, tsMs: Long) {
+        if (currentUserId.isBlank() || currentUserId == "000") return
+        viewModelScope.launch(Dispatchers.IO) {
+            val mac   = connectedDeviceMac.ifBlank { "unknown" }
+            val tsIso = isoFmt.format(Date(tsMs))
+            CloudApi.postFallEvent(
+                deviceId     = mac,
+                userId       = currentUserId,
+                type         = type,
+                fallProb     = fallProb,
+                timestampIso = tsIso
+            )
+        }
+    }
+
+    // ── Cloud fetch ───────────────────────────────────────────────────────────
+
+    private fun startCloudRefreshLoop() {
+        cloudRefreshJob?.cancel()
+        cloudRefreshJob = viewModelScope.launch {
+            while (true) {
+                delay(60_000L) // check every minute; actual fetch respects intervals
+                val state = _uiState.value
+                if (state.timeRange == TimeRange.ONE_HOUR && isStale(lastFetch1hMs, REFRESH_1H_MS)) {
+                    fetchCloudVitals("1h")
+                }
+                if (state.timeRange == TimeRange.TWENTY_FOUR_HOURS && isStale(lastFetch24hMs, REFRESH_24H_MS)) {
+                    fetchCloudVitals("24h")
+                }
+            }
+        }
+    }
+
+    private fun fetchCloudVitals(range: String) {
+        if (currentUserId.isBlank() || currentUserId == "000") return
+        if (!isNetworkAvailable()) {
+            // Offline: use cache already loaded from prefs
+            _uiState.update { it.copy(cloudLoadState = CloudLoadState.IDLE) }
+            refreshChart()
+            return
+        }
+        _uiState.update { it.copy(cloudLoadState = CloudLoadState.LOADING) }
+        viewModelScope.launch {
+            val mac = connectedDeviceMac.ifBlank { "" }
+            val items = withContext(Dispatchers.IO) {
+                CloudApi.getVitals(userId = currentUserId, deviceId = "", range = range)
+            }
+            if (items.isEmpty() && range == "1h" && cloud1hHr.isNotEmpty()) {
+                // No new data — keep cache, don't overwrite
+                _uiState.update { it.copy(cloudLoadState = CloudLoadState.IDLE) }
+                return@launch
+            }
+
+            // Bucket cloud data by timestamp into chart slots
+            val (hrList, spo2List) = if (range == "1h") {
+                bucketCloud(items, slotCount = 12, slotMs = 5 * 60_000L)
+            } else {
+                bucketCloud(items, slotCount = 24, slotMs = 60 * 60_000L)
+            }
+            val filledHr   = hrList.count   { it > 0 }
+            val filledSpO2 = spo2List.count { it > 0 }
+            Log.d(TAG, "fetchCloudVitals[$range]: ${items.size} raw → ${hrList.size} buckets " +
+                       "(hr filled=$filledHr/${hrList.size}, spo2 filled=$filledSpO2/${spo2List.size})")
+            if (items.isNotEmpty()) {
+                Log.d(TAG, "  oldest ts=${items.firstOrNull()?.timestamp}, newest ts=${items.lastOrNull()?.timestamp}")
+            }
+
+            val prefs = getApplication<Application>().applicationContext
+                .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+            if (range == "1h") {
+                cloud1hHr   = hrList
+                cloud1hSpo2 = spo2List
+                lastFetch1hMs = System.currentTimeMillis()
+                prefs.edit {
+                    putString(KEY_CLOUD_1H_HR,   hrList.joinToString(","))
+                    putString(KEY_CLOUD_1H_SPO2, spo2List.joinToString(","))
+                }
+            } else {
+                cloud24hHr   = hrList
+                cloud24hSpo2 = spo2List
+                lastFetch24hMs = System.currentTimeMillis()
+                prefs.edit {
+                    putString(KEY_CLOUD_24H_HR,   hrList.joinToString(","))
+                    putString(KEY_CLOUD_24H_SPO2, spo2List.joinToString(","))
+                }
+            }
+            _uiState.update { it.copy(cloudLoadState = CloudLoadState.SUCCESS) }
+            refreshChart()
+        }
+    }
+
+    /**
+     * Bucket cloud vitals into fixed-size slots aligned to the current time.
+     * Returns (hrBuckets, spo2Buckets) where each list has [slotCount] entries.
+     * Slot 0 = oldest, slot [slotCount-1] = newest. Empty slots = 0.
+     */
+    private fun bucketCloud(
+        items: List<CloudVital>,
+        slotCount: Int,
+        slotMs: Long
+    ): Pair<List<Int>, List<Int>> {
+        val now = System.currentTimeMillis()
+        // Anchor newest slot to current bucket boundary
+        val currentSlot = (now / slotMs) * slotMs
+        val oldestSlot  = currentSlot - (slotCount - 1) * slotMs
+
+        // Accumulators per slot
+        val hrSum    = LongArray(slotCount)
+        val hrCount  = IntArray(slotCount)
+        val spSum    = LongArray(slotCount)
+        val spCount  = IntArray(slotCount)
+
+        items.forEach { item ->
+            val tsMs = parseIsoToMs(item.timestamp) ?: return@forEach
+            if (tsMs < oldestSlot || tsMs > currentSlot + slotMs) return@forEach
+            val idx = ((tsMs - oldestSlot) / slotMs).toInt().coerceIn(0, slotCount - 1)
+            val hr = item.heartRate
+            if (hr != null && hr > 0) {
+                hrSum[idx]  = hrSum[idx] + hr
+                hrCount[idx] = hrCount[idx] + 1
+            }
+            val sp = item.spo2
+            if (sp != null && sp > 0) {
+                spSum[idx]  = spSum[idx] + sp
+                spCount[idx] = spCount[idx] + 1
+            }
+        }
+
+        val hrOut   = List(slotCount) { i -> if (hrCount[i] > 0) (hrSum[i] / hrCount[i]).toInt() else 0 }
+        val spOut   = List(slotCount) { i -> if (spCount[i] > 0) (spSum[i] / spCount[i]).toInt() else 0 }
+        return hrOut to spOut
+    }
+
+    private fun parseIsoToMs(iso: String): Long? {
+        if (iso.isBlank()) return null
+        return try {
+            isoFmt.parse(iso)?.time
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun loadCloudCacheFromPrefs(prefs: android.content.SharedPreferences) {
+        cloud1hHr    = parseIntList(prefs.getString(KEY_CLOUD_1H_HR,   null))
+        cloud1hSpo2  = parseIntList(prefs.getString(KEY_CLOUD_1H_SPO2, null))
+        cloud24hHr   = parseIntList(prefs.getString(KEY_CLOUD_24H_HR,  null))
+        cloud24hSpo2 = parseIntList(prefs.getString(KEY_CLOUD_24H_SPO2, null))
+    }
+
+    private fun parseIntList(s: String?): List<Int> {
+        if (s.isNullOrBlank()) return emptyList()
+        return s.split(",").mapNotNull { it.trim().toIntOrNull() }
+    }
+
+    private fun isStale(lastMs: Long, intervalMs: Long) =
+        System.currentTimeMillis() - lastMs > intervalMs
+
+    // ── Live tick ─────────────────────────────────────────────────────────────
+
     private fun startLiveTick() {
         liveTickJob?.cancel()
         liveTickJob = viewModelScope.launch {
             while (true) {
                 delay(1_000)
-                val username = getApplication<Application>().applicationContext
-                    .getSharedPreferences("aifd_prefs", Context.MODE_PRIVATE)
-                    .getString("username", "") ?: ""
-                if (username == "000") continue
-
+                if (currentUserId == "000") continue
                 _uiState.update { state ->
+                    val isHR = state.activeTab == MetricTab.HEART_RATE
+                    // Ưu tiên cloud data; fallback về vitalsStore khi cloud chưa có
                     val updatedChart = when (state.timeRange) {
-                        TimeRange.LIVE              -> emptyList()
-                        TimeRange.ONE_HOUR          -> vitalsStore.get1hChart(state.activeTab == MetricTab.HEART_RATE)
-                        TimeRange.TWENTY_FOUR_HOURS -> vitalsStore.get24hChart(state.activeTab == MetricTab.HEART_RATE)
+                        TimeRange.LIVE -> emptyList()
+                        TimeRange.ONE_HOUR -> {
+                            val cloud = if (isHR) cloud1hHr else cloud1hSpo2
+                            cloud.ifEmpty { vitalsStore.get1hChart(isHR) }
+                        }
+                        TimeRange.TWENTY_FOUR_HOURS -> {
+                            val cloud = if (isHR) cloud24hHr else cloud24hSpo2
+                            cloud.ifEmpty { vitalsStore.get24hChart(isHR) }
+                        }
                     }
                     state.copy(chartData = updatedChart)
                 }
@@ -217,12 +477,8 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     private fun refreshChart() {
-        val state = _uiState.value
-        val username = getApplication<Application>().applicationContext
-            .getSharedPreferences("aifd_prefs", Context.MODE_PRIVATE)
-            .getString("username", "") ?: ""
-
-        if (username == "000") {
+        val state  = _uiState.value
+        if (currentUserId == "000") {
             if (state.timeRange == TimeRange.LIVE) return
             val points = when (state.timeRange) {
                 TimeRange.ONE_HOUR          -> 60
@@ -237,19 +493,37 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
             return
         }
 
-        val newChart = when (state.timeRange) {
-            TimeRange.LIVE              -> state.chartData
-            TimeRange.ONE_HOUR          -> vitalsStore.get1hChart(state.activeTab == MetricTab.HEART_RATE)
-            TimeRange.TWENTY_FOUR_HOURS -> vitalsStore.get24hChart(state.activeTab == MetricTab.HEART_RATE)
+        val isHR = state.activeTab == MetricTab.HEART_RATE
+        val newChart: List<Int> = when (state.timeRange) {
+            TimeRange.LIVE -> emptyList()
+            TimeRange.ONE_HOUR -> {
+                val cloud = if (isHR) cloud1hHr else cloud1hSpo2
+                cloud.ifEmpty { vitalsStore.get1hChart(isHR) }
+            }
+            TimeRange.TWENTY_FOUR_HOURS -> {
+                val cloud = if (isHR) cloud24hHr else cloud24hSpo2
+                cloud.ifEmpty { vitalsStore.get24hChart(isHR) }
+            }
         }
         _uiState.update { it.copy(chartData = newChart) }
     }
+
+    // ── Network helper ────────────────────────────────────────────────────────
+
+    private fun isNetworkAvailable(): Boolean {
+        val cm = getApplication<Application>().applicationContext
+            .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val cap = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
+        return cap.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
+
+    // ── Health helpers ────────────────────────────────────────────────────────
 
     private fun emptyHealthData() = HealthData(
         heartRate = 0, heartRateStatus = HealthStatus.NORMAL,
         heartRateHistory = emptyList(), heartRateMin = 0, heartRateMax = 0,
         spO2 = 0, spO2Status = HealthStatus.NORMAL, spO2History = emptyList(),
-        stepCount = 0, stepGoal = 10000, lastUpdated = java.util.Date()
+        stepCount = 0, stepGoal = 10000, lastUpdated = Date()
     )
 
     private fun hrStatus(hr: Int) = when {
@@ -260,12 +534,13 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
 
     private fun spo2Status(spo2: Int) = when {
         spo2 in 1..94 -> HealthStatus.LOW
-        else          -> HealthStatus.NORMAL
+        else           -> HealthStatus.NORMAL
     }
 
     override fun onCleared() {
         super.onCleared()
         liveTickJob?.cancel()
+        cloudRefreshJob?.cancel()
         vitalsStore.saveToPrefs()
         if (isBound) {
             getApplication<Application>().applicationContext.unbindService(serviceConnection)

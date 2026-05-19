@@ -45,7 +45,7 @@
 ```
 ESP32-S3 (peripheral)              Android (central)
 ─────────────────────────          ─────────────────
-"S3_AIFD Wearable_test"   ── BLE ─► BleForegroundService
+"S3_AIFD Wearable_test_2"   ── BLE ─► BleForegroundService
                                        └─► BleManager
 Service 4fafc201-...                          │
  ├─ ALERT  beb5483e-...  (NOTIFY) ◄──┬─ subscribe
@@ -182,7 +182,7 @@ boot → bind service → autoConnectBondedEsp32() (match bonded "ESP32"/"S3" na
 - ALERT char:  `beb5483e-36e1-4688-b7f5-ea07361b26a8` (notify, read)
 - VITALS char: `7b809f11-63f0-4dca-8e4d-2b4e8384e7c1` (notify, read) — giờ carry cả `BATCH` lẫn `BMI`
 - CONTROL char:`f9b2c417-1d15-4ad4-9b52-b94aa0f76b03` (read, write `READY`/`PING`)
-- Tên thiết bị: `"S3_AIFD Wearable_test"`
+- Tên thiết bị: `"S3_AIFD Wearable_test_2"`
 
 ---
 
@@ -282,7 +282,7 @@ cd android_studio_AIFD
    - `[BMI] notify: BMI,1,5,1.034,5.7,0` (5 s tick)
    - `[BLE] VITALS notify: BATCH,...` (25 s tick)
 3. Cài APK lên Android phone (Android 8+, BT 4.0+).
-4. Settings → Bluetooth → pair "S3_AIFD Wearable_test".
+4. Settings → Bluetooth → pair "S3_AIFD Wearable_test_2".
 5. Mở app → đăng nhập (không dùng tài khoản "000") → đợi "Connected".
 6. Logcat filter `BleManager`:
    - `BMI: acc=1.034g gyro=5.7dps active=false`

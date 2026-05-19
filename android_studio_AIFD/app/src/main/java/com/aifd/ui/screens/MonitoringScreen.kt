@@ -1,5 +1,7 @@
 package com.aifd.ui.screens
 
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -15,6 +17,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
@@ -31,6 +36,7 @@ import com.aifd.ui.components.aifd.AifdChartEmptyState
 import com.aifd.ui.localization.AppLocalizations
 import com.aifd.ui.theme.AIFDTheme
 import com.aifd.ui.theme.AIFDThemeExt
+import com.aifd.viewmodel.CloudLoadState
 import com.aifd.viewmodel.MetricTab
 import com.aifd.viewmodel.MonitoringUiState
 import com.aifd.viewmodel.MonitoringViewModel
@@ -47,7 +53,8 @@ fun MonitoringScreen(
         uiState = uiState,
         onTabSelected = viewModel::selectTab,
         onTimeRangeSelected = viewModel::selectTimeRange,
-        stats = viewModel.getStats()
+        stats = viewModel.getStats(),
+        isCaregiver = role == UserRole.CAREGIVER
     )
 }
 
@@ -57,7 +64,8 @@ private fun MonitoringScreenContent(
     uiState: MonitoringUiState,
     onTabSelected: (MetricTab) -> Unit = {},
     onTimeRangeSelected: (TimeRange) -> Unit = {},
-    stats: Triple<Int, Int, Int> = Triple(0, 0, 0)
+    stats: Triple<Int, Int, Int> = Triple(0, 0, 0),
+    isCaregiver: Boolean = false
 ) {
     val strings = AppLocalizations.strings
     Column(
@@ -112,11 +120,95 @@ private fun MonitoringScreenContent(
             }
 
             when (uiState.activeTab) {
-                MetricTab.HEART_RATE -> HeartRateContent(uiState, onTimeRangeSelected, stats)
-                MetricTab.SPO2 -> SpO2Content(uiState, onTimeRangeSelected, stats)
+                MetricTab.HEART_RATE -> HeartRateContent(uiState, onTimeRangeSelected, stats, isCaregiver)
+                MetricTab.SPO2 -> SpO2Content(uiState, onTimeRangeSelected, stats, isCaregiver)
             }
 
             Spacer(modifier = Modifier.height(80.dp))
+    }
+}
+
+// ── Cloud loading animation ───────────────────────────────────────────────────
+
+@Composable
+private fun CloudLoadingCard() {
+    val infiniteTransition = rememberInfiniteTransition(label = "cloud_load")
+
+    // Rotating sync icon
+    val angle by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue  = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 900, easing = LinearEasing)
+        ),
+        label = "rotate"
+    )
+
+    // Shimmer bar position (0 → 1 → 0)
+    val shimmerPos by infiniteTransition.animateFloat(
+        initialValue = -0.4f,
+        targetValue  = 1.4f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1200, easing = FastOutSlowInEasing)
+        ),
+        label = "shimmer"
+    )
+
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val trackColor   = MaterialTheme.colorScheme.surfaceVariant
+
+    ElevatedCard(
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 18.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Sync,
+                contentDescription = null,
+                modifier = Modifier.size(22.dp).rotate(angle),
+                tint = primaryColor
+            )
+            Column {
+                Text(
+                    text = "Đang tải dữ liệu từ Cloud…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium
+                )
+                Text(
+                    text = "Vui lòng chờ trong giây lát",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        // Custom shimmer bar — avoids LinearProgressIndicator BOM incompatibility
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(4.dp)
+        ) {
+            // Track
+            drawRect(color = trackColor, size = size)
+            // Shimmer stripe
+            val stripeWidth = size.width * 0.35f
+            val x = shimmerPos * size.width - stripeWidth / 2
+            drawRect(
+                color = primaryColor,
+                topLeft = Offset(x.coerceIn(0f, size.width), 0f),
+                size = Size(
+                    width  = (stripeWidth - (x - (size.width - stripeWidth)).coerceAtLeast(0f))
+                        .coerceIn(0f, stripeWidth),
+                    height = size.height
+                )
+            )
+        }
     }
 }
 
@@ -192,10 +284,16 @@ private fun StatsRow(stats: Triple<Int, Int, Int>, unit: String = "") {
 private fun HeartRateContent(
     uiState: MonitoringUiState,
     onTimeRangeSelected: (TimeRange) -> Unit,
-    stats: Triple<Int, Int, Int>
+    stats: Triple<Int, Int, Int>,
+    isCaregiver: Boolean = false
 ) {
     val strings = AppLocalizations.strings
     TimeRangeSelector(selected = uiState.timeRange, onSelected = onTimeRangeSelected)
+
+    // Cloud loading indicator (only for history tabs)
+    if (uiState.timeRange != TimeRange.LIVE && uiState.cloudLoadState == CloudLoadState.LOADING) {
+        CloudLoadingCard()
+    }
 
     // Current value
     ElevatedCard(shape = RoundedCornerShape(16.dp)) {
@@ -257,8 +355,8 @@ private fun HeartRateContent(
         }
     }
 
-    // Info card: show connect prompt when no data, otherwise health info
-    if (!uiState.isConnected || uiState.healthData == null || uiState.healthData.heartRate == 0) {
+    // Info card: wearer sees connect prompt; caregiver skips it
+    if (!isCaregiver && (!uiState.isConnected || uiState.healthData == null || uiState.healthData.heartRate == 0)) {
         ElevatedCard(
             shape = RoundedCornerShape(24.dp),
             elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
@@ -367,10 +465,16 @@ private fun HeartRateContent(
 private fun SpO2Content(
     uiState: MonitoringUiState,
     onTimeRangeSelected: (TimeRange) -> Unit,
-    stats: Triple<Int, Int, Int>
+    stats: Triple<Int, Int, Int>,
+    isCaregiver: Boolean = false
 ) {
     val strings = AppLocalizations.strings
     TimeRangeSelector(selected = uiState.timeRange, onSelected = onTimeRangeSelected)
+
+    // Cloud loading indicator (only for history tabs)
+    if (uiState.timeRange != TimeRange.LIVE && uiState.cloudLoadState == CloudLoadState.LOADING) {
+        CloudLoadingCard()
+    }
 
     ElevatedCard(shape = RoundedCornerShape(16.dp)) {
         Row(
@@ -429,8 +533,8 @@ private fun SpO2Content(
         }
     }
 
-    // Info card: show connect prompt when no data, otherwise health info
-    if (!uiState.isConnected || uiState.healthData == null || uiState.healthData.spO2 == 0) {
+    // Info card: wearer sees connect prompt; caregiver skips it
+    if (!isCaregiver && (!uiState.isConnected || uiState.healthData == null || uiState.healthData.spO2 == 0)) {
         ElevatedCard(
             shape = RoundedCornerShape(24.dp),
             elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
