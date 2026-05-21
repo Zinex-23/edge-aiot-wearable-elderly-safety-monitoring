@@ -57,8 +57,8 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
         private const val KEY_CLOUD_1H_SPO2 = "cloud_1h_spo2"
         private const val KEY_CLOUD_24H_HR   = "cloud_24h_hr"
         private const val KEY_CLOUD_24H_SPO2 = "cloud_24h_spo2"
-        private const val REFRESH_1H_MS  = 5  * 60_000L   // 5 minutes
-        private const val REFRESH_24H_MS = 30 * 60_000L   // 30 minutes
+        private const val REFRESH_1H_MS  = 5 * 60_000L    // 5 minutes
+        private const val REFRESH_24H_MS = 5 * 60_000L    // 5 minutes
     }
 
     private val _uiState = MutableStateFlow(MonitoringUiState())
@@ -148,6 +148,16 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
         }
         if (range == TimeRange.TWENTY_FOUR_HOURS && isStale(lastFetch24hMs, REFRESH_24H_MS)) {
             fetchCloudVitals("24h")
+        }
+    }
+
+    fun forceRefreshCloud() {
+        lastFetch1hMs  = 0L
+        lastFetch24hMs = 0L
+        when (_uiState.value.timeRange) {
+            TimeRange.ONE_HOUR          -> fetchCloudVitals("1h")
+            TimeRange.TWENTY_FOUR_HOURS -> fetchCloudVitals("24h")
+            else -> {}
         }
     }
 

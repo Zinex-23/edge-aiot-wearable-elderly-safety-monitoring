@@ -220,6 +220,34 @@ def login():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/auth/change-password", methods=["POST"])
+def change_password():
+    try:
+        data         = request.get_json(force=True)
+        username     = (data.get("username") or "").strip()
+        current_pwd  = data.get("currentPassword") or ""
+        new_pwd      = data.get("newPassword") or ""
+
+        if not username or not current_pwd or not new_pwd:
+            return jsonify({"ok": False, "error": "username, currentPassword and newPassword required"}), 400
+
+        user = users_col.find_one({"username": username})
+        if not user:
+            return jsonify({"ok": False, "error": "user not found"}), 404
+
+        if user.get("passwordHash") != hash_password(current_pwd):
+            return jsonify({"ok": False, "error": "wrong current password"}), 401
+
+        users_col.update_one(
+            {"username": username},
+            {"$set": {"passwordHash": hash_password(new_pwd)}}
+        )
+        return jsonify({"ok": True, "message": "password changed"}), 200
+
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 # =========================
 # VITALS
 # =========================
@@ -265,7 +293,8 @@ def get_vitals():
       userId   — required
       deviceId — optional filter
       range    — "1h" | "24h" (default "1h")
-      limit    — max documents (default 300)
+      limit    — max documents for 1h (default 300, max 1000)
+    24h range uses hourly aggregation (ignores limit); returns at most 24 hourly buckets.
     """
     try:
         user_id   = request.args.get("userId", "")
@@ -278,28 +307,57 @@ def get_vitals():
             return jsonify({"ok": False, "error": "userId required"}), 400
 
         now = datetime.now(timezone.utc)
+
         if range_str == "24h":
             since = now - timedelta(hours=24)
+            match_stage = {
+                "userId":    user_id,
+                "timestamp": {"$gte": since, "$lte": now},
+            }
+            if device_id:
+                match_stage["deviceId"] = device_id
+
+            pipeline = [
+                {"$match": match_stage},
+                {"$group": {
+                    "_id":     {"$dateToString": {"format": "%Y-%m-%dT%H:00:00Z", "date": "$timestamp"}},
+                    "avgHR":   {"$avg": "$heartRate"},
+                    "avgSpo2": {"$avg": "$spo2"},
+                    "count":   {"$sum": 1},
+                }},
+                {"$sort":  {"_id": 1}},
+                {"$limit": 24},
+            ]
+            buckets = list(vitals_col.aggregate(pipeline))
+            items = [
+                {
+                    "timestamp": b["_id"],
+                    "heartRate": round(b["avgHR"])   if b.get("avgHR")   is not None else None,
+                    "spo2":      round(b["avgSpo2"]) if b.get("avgSpo2") is not None else None,
+                }
+                for b in buckets
+            ]
+            return jsonify({"ok": True, "count": len(items), "items": items}), 200
+
         else:
             since = now - timedelta(hours=1)
+            query = {
+                "userId":    user_id,
+                "timestamp": {"$gte": since},
+            }
+            if device_id:
+                query["deviceId"] = device_id
 
-        query = {
-            "userId":    user_id,
-            "timestamp": {"$gte": since},
-        }
-        if device_id:
-            query["deviceId"] = device_id
+            docs = list(
+                vitals_col.find(query).sort("timestamp", DESCENDING).limit(limit)
+            )
+            docs.reverse()
 
-        docs = list(
-            vitals_col.find(query).sort("timestamp", DESCENDING).limit(limit)
-        )
-        docs.reverse()
-
-        return jsonify({
-            "ok":    True,
-            "count": len(docs),
-            "items": [serialize_vital(d) for d in docs],
-        }), 200
+            return jsonify({
+                "ok":    True,
+                "count": len(docs),
+                "items": [serialize_vital(d) for d in docs],
+            }), 200
 
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500

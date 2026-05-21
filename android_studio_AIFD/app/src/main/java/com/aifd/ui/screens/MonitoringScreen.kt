@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -53,6 +54,7 @@ fun MonitoringScreen(
         uiState = uiState,
         onTabSelected = viewModel::selectTab,
         onTimeRangeSelected = viewModel::selectTimeRange,
+        onRefreshCloud = viewModel::forceRefreshCloud,
         stats = viewModel.getStats(),
         isCaregiver = role == UserRole.CAREGIVER
     )
@@ -64,6 +66,7 @@ private fun MonitoringScreenContent(
     uiState: MonitoringUiState,
     onTabSelected: (MetricTab) -> Unit = {},
     onTimeRangeSelected: (TimeRange) -> Unit = {},
+    onRefreshCloud: () -> Unit = {},
     stats: Triple<Int, Int, Int> = Triple(0, 0, 0),
     isCaregiver: Boolean = false
 ) {
@@ -120,8 +123,8 @@ private fun MonitoringScreenContent(
             }
 
             when (uiState.activeTab) {
-                MetricTab.HEART_RATE -> HeartRateContent(uiState, onTimeRangeSelected, stats, isCaregiver)
-                MetricTab.SPO2 -> SpO2Content(uiState, onTimeRangeSelected, stats, isCaregiver)
+                MetricTab.HEART_RATE -> HeartRateContent(uiState, onTimeRangeSelected, onRefreshCloud, stats, isCaregiver)
+                MetricTab.SPO2 -> SpO2Content(uiState, onTimeRangeSelected, onRefreshCloud, stats, isCaregiver)
             }
 
             Spacer(modifier = Modifier.height(80.dp))
@@ -216,7 +219,8 @@ private fun CloudLoadingCard() {
 @Composable
 private fun TimeRangeSelector(
     selected: TimeRange,
-    onSelected: (TimeRange) -> Unit
+    onSelected: (TimeRange) -> Unit,
+    showLive: Boolean = true
 ) {
     val strings = AppLocalizations.strings
     Row(
@@ -224,6 +228,7 @@ private fun TimeRangeSelector(
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         TimeRange.entries.forEach { range ->
+            if (range == TimeRange.LIVE && !showLive) return@forEach
             val label = when (range) {
                 TimeRange.LIVE -> strings.live
                 TimeRange.ONE_HOUR -> strings.oneHour
@@ -284,18 +289,32 @@ private fun StatsRow(stats: Triple<Int, Int, Int>, unit: String = "") {
 private fun HeartRateContent(
     uiState: MonitoringUiState,
     onTimeRangeSelected: (TimeRange) -> Unit,
+    onRefreshCloud: () -> Unit = {},
     stats: Triple<Int, Int, Int>,
     isCaregiver: Boolean = false
 ) {
     val strings = AppLocalizations.strings
-    TimeRangeSelector(selected = uiState.timeRange, onSelected = onTimeRangeSelected)
+
+    // Caregiver không xem được Live (không có BLE) → tự chuyển sang 1H
+    LaunchedEffect(isCaregiver) {
+        if (isCaregiver && uiState.timeRange == TimeRange.LIVE) {
+            onTimeRangeSelected(TimeRange.ONE_HOUR)
+        }
+    }
+
+    TimeRangeSelector(
+        selected  = uiState.timeRange,
+        onSelected = onTimeRangeSelected,
+        showLive  = !isCaregiver
+    )
 
     // Cloud loading indicator (only for history tabs)
     if (uiState.timeRange != TimeRange.LIVE && uiState.cloudLoadState == CloudLoadState.LOADING) {
         CloudLoadingCard()
     }
 
-    // Current value
+    // Current value — chỉ hiện ở Live mode (caregiver không vào được Live nên ẩn luôn)
+    if (!isCaregiver || uiState.timeRange == TimeRange.LIVE) {
     ElevatedCard(shape = RoundedCornerShape(16.dp)) {
         Row(
             modifier = Modifier
@@ -327,13 +346,15 @@ private fun HeartRateContent(
             )
         }
     }
+    } // end if (!isCaregiver || LIVE)
 
     // Chart card — only rendered for 1h and 24h modes (LIVE focuses on current value)
     if (uiState.timeRange != TimeRange.LIVE) {
         val hasChartData = uiState.chartData.any { it > 0 }
         AifdChartCard(
-            title    = strings.heartRateTrend,
-            trailing = if (uiState.timeRange == TimeRange.ONE_HOUR) "1h" else "24h"
+            title     = strings.heartRateTrend,
+            trailing  = if (uiState.timeRange == TimeRange.ONE_HOUR) "1h" else "24h",
+            onRefresh = onRefreshCloud
         ) {
             if (hasChartData) {
                 LineChart(
@@ -355,8 +376,8 @@ private fun HeartRateContent(
         }
     }
 
-    // Info card: wearer sees connect prompt; caregiver skips it
-    if (!isCaregiver && (!uiState.isConnected || uiState.healthData == null || uiState.healthData.heartRate == 0)) {
+    // Info/connect cards — hidden entirely for caregiver
+    if (!isCaregiver) if (!uiState.isConnected || uiState.healthData == null || uiState.healthData.heartRate == 0) {
         ElevatedCard(
             shape = RoundedCornerShape(24.dp),
             elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
@@ -465,17 +486,32 @@ private fun HeartRateContent(
 private fun SpO2Content(
     uiState: MonitoringUiState,
     onTimeRangeSelected: (TimeRange) -> Unit,
+    onRefreshCloud: () -> Unit = {},
     stats: Triple<Int, Int, Int>,
     isCaregiver: Boolean = false
 ) {
     val strings = AppLocalizations.strings
-    TimeRangeSelector(selected = uiState.timeRange, onSelected = onTimeRangeSelected)
+
+    // Caregiver không xem được Live → tự chuyển sang 1H
+    LaunchedEffect(isCaregiver) {
+        if (isCaregiver && uiState.timeRange == TimeRange.LIVE) {
+            onTimeRangeSelected(TimeRange.ONE_HOUR)
+        }
+    }
+
+    TimeRangeSelector(
+        selected   = uiState.timeRange,
+        onSelected = onTimeRangeSelected,
+        showLive   = !isCaregiver
+    )
 
     // Cloud loading indicator (only for history tabs)
     if (uiState.timeRange != TimeRange.LIVE && uiState.cloudLoadState == CloudLoadState.LOADING) {
         CloudLoadingCard()
     }
 
+    // Current value — chỉ hiện ở Live mode
+    if (!isCaregiver || uiState.timeRange == TimeRange.LIVE) {
     ElevatedCard(shape = RoundedCornerShape(16.dp)) {
         Row(
             modifier = Modifier
@@ -506,12 +542,14 @@ private fun SpO2Content(
             )
         }
     }
+    } // end if (!isCaregiver || LIVE)
 
     if (uiState.timeRange != TimeRange.LIVE) {
         val hasChartData = uiState.chartData.any { it > 0 }
         AifdChartCard(
-            title    = strings.spo2Trend,
-            trailing = if (uiState.timeRange == TimeRange.ONE_HOUR) "1h" else "24h"
+            title     = strings.spo2Trend,
+            trailing  = if (uiState.timeRange == TimeRange.ONE_HOUR) "1h" else "24h",
+            onRefresh = onRefreshCloud
         ) {
             if (hasChartData) {
                 LineChart(
@@ -533,8 +571,8 @@ private fun SpO2Content(
         }
     }
 
-    // Info card: wearer sees connect prompt; caregiver skips it
-    if (!isCaregiver && (!uiState.isConnected || uiState.healthData == null || uiState.healthData.spO2 == 0)) {
+    // Info/connect cards — hidden entirely for caregiver
+    if (!isCaregiver) if (!uiState.isConnected || uiState.healthData == null || uiState.healthData.spO2 == 0) {
         ElevatedCard(
             shape = RoundedCornerShape(24.dp),
             elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),

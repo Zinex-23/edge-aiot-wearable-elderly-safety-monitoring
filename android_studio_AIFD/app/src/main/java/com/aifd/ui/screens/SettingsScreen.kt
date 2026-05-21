@@ -25,8 +25,26 @@ import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhoneIphone
 import androidx.compose.material.icons.filled.Speed
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.ui.draw.rotate
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import com.aifd.data.CloudApi
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.AlertDialog
@@ -68,6 +86,7 @@ import com.aifd.ui.theme.AppThemeMode
 fun SettingsScreen(
     role: UserRole,
     device: DeviceInfo? = null,
+    username: String = "",
     themeMode: AppThemeMode = AppThemeMode.LIGHT,
     language: AppLanguage = AppLanguage.ENGLISH,
     onThemeModeChange: (AppThemeMode) -> Unit = {},
@@ -78,15 +97,15 @@ fun SettingsScreen(
     onNavigateToEmergencyContacts: () -> Unit = {},
     onNavigateToNotifications: () -> Unit = {},
     onNavigateToAccount: () -> Unit = {},
-    onLogout: () -> Unit = {},
-    onClearData: () -> Unit = {}
+    onLogout: () -> Unit = {}
 ) {
     val strings = AppLocalizations.strings
-    var showLogoutDialog by remember { mutableStateOf(false) }
-    var showThemeDialog by remember { mutableStateOf(false) }
-    var showLanguageDialog by remember { mutableStateOf(false) }
-    var showRoleDialog by remember { mutableStateOf(false) }
-    var showClearDataDialog by remember { mutableStateOf(false) }
+    val scope   = rememberCoroutineScope()
+    var showLogoutDialog         by remember { mutableStateOf(false) }
+    var showThemeDialog          by remember { mutableStateOf(false) }
+    var showLanguageDialog       by remember { mutableStateOf(false) }
+    var showRoleDialog           by remember { mutableStateOf(false) }
+    var showChangePasswordDialog by remember { mutableStateOf(false) }
 
     val themeLabel = when (themeMode) {
         AppThemeMode.LIGHT -> strings.light
@@ -135,17 +154,15 @@ fun SettingsScreen(
                 subtitle = strings.viewProfile,
                 onClick = onNavigateToAccount
             )
+            AifdSettingsRow(
+                icon = Icons.Default.Lock,
+                title = strings.changePassword,
+                subtitle = strings.changePasswordSubtitle,
+                onClick = { showChangePasswordDialog = true }
+            )
         }
 
         AifdSectionCard(title = strings.dangerZone) {
-            AifdSettingsRow(
-                icon = Icons.Default.Delete,
-                title = strings.clearData,
-                subtitle = strings.clearDataMessage.take(40) + "…",
-                onClick = { showClearDataDialog = true },
-                iconTint = MaterialTheme.colorScheme.error,
-                iconBackground = MaterialTheme.colorScheme.errorContainer
-            )
             AifdSettingsRow(
                 icon = Icons.AutoMirrored.Filled.Logout,
                 title = strings.logout,
@@ -204,25 +221,11 @@ fun SettingsScreen(
         )
     }
 
-    if (showClearDataDialog) {
-        AlertDialog(
-            onDismissRequest = { showClearDataDialog = false },
-            title = { Text(strings.clearDataTitle) },
-            text  = { Text(strings.clearDataMessage) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showClearDataDialog = false
-                        onClearData()
-                    },
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error
-                    )
-                ) { Text(strings.clearDataConfirm) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showClearDataDialog = false }) { Text(strings.cancel) }
-            }
+    if (showChangePasswordDialog) {
+        ChangePasswordDialog(
+            username  = username,
+            scope     = scope,
+            onDismiss = { showChangePasswordDialog = false }
         )
     }
 
@@ -363,6 +366,130 @@ private fun SettingsItem(
         }
         Icon(Icons.Default.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }
+}
+
+@Composable
+private fun ChangePasswordDialog(
+    username: String,
+    scope: kotlinx.coroutines.CoroutineScope,
+    onDismiss: () -> Unit
+) {
+    val strings = AppLocalizations.strings
+    var currentPwd   by remember { mutableStateOf("") }
+    var newPwd       by remember { mutableStateOf("") }
+    var confirmPwd   by remember { mutableStateOf("") }
+    var showCurrent  by remember { mutableStateOf(false) }
+    var showNew      by remember { mutableStateOf(false) }
+    var showConfirm  by remember { mutableStateOf(false) }
+    var errorMsg     by remember { mutableStateOf("") }
+    var successMsg   by remember { mutableStateOf("") }
+    var isLoading    by remember { mutableStateOf(false) }
+    val spinAngle    by rememberInfiniteTransition(label = "spin").animateFloat(
+        initialValue = 0f, targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(700, easing = LinearEasing)),
+        label = "spin"
+    )
+
+    AlertDialog(
+        onDismissRequest = { if (!isLoading) onDismiss() },
+        title = { Text(strings.changePasswordTitle, fontWeight = FontWeight.SemiBold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                // Current password
+                OutlinedTextField(
+                    value = currentPwd,
+                    onValueChange = { currentPwd = it; errorMsg = "" },
+                    label = { Text(strings.currentPassword) },
+                    singleLine = true,
+                    visualTransformation = if (showCurrent) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { showCurrent = !showCurrent }) {
+                            Icon(
+                                if (showCurrent) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = null
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                // New password
+                OutlinedTextField(
+                    value = newPwd,
+                    onValueChange = { newPwd = it; errorMsg = "" },
+                    label = { Text(strings.newPassword) },
+                    singleLine = true,
+                    visualTransformation = if (showNew) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { showNew = !showNew }) {
+                            Icon(
+                                if (showNew) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = null
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                // Confirm new password
+                OutlinedTextField(
+                    value = confirmPwd,
+                    onValueChange = { confirmPwd = it; errorMsg = "" },
+                    label = { Text(strings.confirmNewPassword) },
+                    singleLine = true,
+                    isError = confirmPwd.isNotBlank() && confirmPwd != newPwd,
+                    visualTransformation = if (showConfirm) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { showConfirm = !showConfirm }) {
+                            Icon(
+                                if (showConfirm) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = null
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (errorMsg.isNotBlank()) {
+                    Text(errorMsg, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+                if (successMsg.isNotBlank()) {
+                    Text(successMsg, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !isLoading && currentPwd.isNotBlank() && newPwd.isNotBlank() && confirmPwd.isNotBlank(),
+                onClick = {
+                    if (newPwd != confirmPwd) { errorMsg = strings.passwordMismatch; return@TextButton }
+                    isLoading = true
+                    errorMsg  = ""
+                    scope.launch {
+                        val result = withContext(Dispatchers.IO) {
+                            CloudApi.changePassword(username, currentPwd, newPwd)
+                        }
+                        isLoading = false
+                        if (result.ok) {
+                            successMsg = strings.passwordChanged
+                            currentPwd = ""; newPwd = ""; confirmPwd = ""
+                        } else {
+                            errorMsg = when {
+                                result.error.contains("wrong", ignoreCase = true) -> strings.wrongCurrentPassword
+                                result.error.contains("network", ignoreCase = true) -> "Không có kết nối mạng"
+                                else -> result.error
+                            }
+                        }
+                    }
+                }
+            ) {
+                if (isLoading)
+                    Icon(Icons.Default.Refresh, contentDescription = null,
+                        modifier = Modifier.size(16.dp).rotate(spinAngle))
+                else Text(strings.confirm, fontWeight = FontWeight.SemiBold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = { if (!isLoading) onDismiss() }) { Text(strings.cancel) }
+        }
+    )
 }
 
 @Preview(showBackground = true, showSystemUi = true)

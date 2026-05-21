@@ -294,6 +294,7 @@ fun AppNavigation(
                 SettingsScreen(
                     role = selectedRole,
                     device = deviceState.device,
+                    username = username,
                     themeMode = themeMode,
                     language = language,
                     onThemeModeChange = onThemeModeChange,
@@ -312,8 +313,7 @@ fun AppNavigation(
                     onNavigateToEmergencyContacts = { /* TODO */ },
                     onNavigateToNotifications = { /* TODO */ },
                     onNavigateToAccount = { navController.navigate(Screen.Profile.route) },
-                    onLogout = onLogout,
-                    onClearData = { monitoringViewModel.clearVitalsData() }
+                    onLogout = onLogout
                 )
             }
 

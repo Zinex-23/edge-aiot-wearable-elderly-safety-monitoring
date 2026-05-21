@@ -101,6 +101,20 @@ object CloudApi {
         }
     }
 
+    fun changePassword(username: String, currentPassword: String, newPassword: String): CloudResult {
+        val body = JsonObject().apply {
+            addProperty("username",         username)
+            addProperty("currentPassword",  currentPassword)
+            addProperty("newPassword",      newPassword)
+        }
+        return try {
+            val resp = post("$RENDER_URL/api/auth/change-password", body.toString())
+            gson.fromJson(resp, CloudResult::class.java)
+        } catch (e: Exception) {
+            CloudResult(ok = false, error = e.message ?: "network error")
+        }
+    }
+
     fun login(username: String, password: String): AuthResult {
         val body = JsonObject().apply {
             addProperty("username", username)
