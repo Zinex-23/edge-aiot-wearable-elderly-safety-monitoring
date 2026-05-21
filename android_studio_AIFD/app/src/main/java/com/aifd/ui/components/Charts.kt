@@ -16,6 +16,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -48,9 +49,9 @@ fun LineChart(
     if (data.isEmpty()) return
 
     val density = LocalDensity.current
-    val leftPad       = with(density) { 42.dp.toPx() }
-    val rightPad      = with(density) { 8.dp.toPx() }
-    val topPad        = with(density) { 22.dp.toPx() }
+    val leftPad       = with(density) { 2.dp.toPx() }   // điểm đầu sát mép trái, x≈2
+    val rightPad      = with(density) { 4.dp.toPx() }
+    val topPad        = with(density) { 40.dp.toPx() }  // đủ chỗ cho peak bubble phía trên
     val bottomPad     = with(density) { if (timeRange != null) 34.dp.toPx() else 8.dp.toPx() }
     val axisTextSz    = with(density) { 10.sp.toPx() }
     val ttValueSz     = with(density) { 13.sp.toPx() }
@@ -59,7 +60,7 @@ fun LineChart(
     val ttBoxH        = with(density) { 50.dp.toPx() }
     val ttCornerR     = with(density) { 9.dp.toPx() }
     val ttAboveGap    = with(density) { 10.dp.toPx() }
-    val dotR          = with(density) { 3.dp.toPx() }
+    val dotR          = with(density) { 2.dp.toPx() }
     val dotSelR       = with(density) { 6.dp.toPx() }
     val tapRadius     = with(density) { 40.dp.toPx() }
 
@@ -126,33 +127,60 @@ fun LineChart(
         val cal     = Calendar.getInstance()
         val axisClr = android.graphics.Color.argb(155, 120, 120, 120)
 
-        // ── Y-axis: max label sits in the top padding zone, just above the max data line ──
-        val axisPaint = NativePaint().apply {
-            color     = axisClr
-            textSize  = axisTextSz
-            isAntiAlias = true
-            textAlign = NativePaint.Align.LEFT
+        // ── Peak bubble tại điểm cao nhất ────────────────────────────────────
+        val lineArgb = lineColor.toArgb()
+        val maxIdx   = data.indices.filter { data[it] == rawMax }.lastOrNull() ?: -1
+        val peakPt   = if (maxIdx >= 0) points.getOrNull(maxIdx) else null
+        if (peakPt != null) {
+            val bubbleTxtPaint = NativePaint().apply {
+                color          = android.graphics.Color.WHITE
+                textSize       = axisTextSz * 1.15f
+                isFakeBoldText = true
+                isAntiAlias    = true
+                textAlign      = NativePaint.Align.CENTER
+            }
+            val bubbleText = rawMax.toString()
+            val bTextW = bubbleTxtPaint.measureText(bubbleText)
+            val bPadH  = 7f;  val bPadV = 5f
+            val bW     = bTextW + bPadH * 2
+            val bH     = axisTextSz + bPadV * 2
+            val triH   = 8f                                // chiều cao tam giác
+            val gap    = 4f                                // khoảng cách từ dot lên đuôi tam giác
+
+            // Bubble nằm TRÊN dot: đáy tam giác cách dot một khoảng gap
+            val triBaseY = peakPt.y - gap                 // đáy tam giác (ngay trên dot)
+            val bY = (triBaseY - triH - bH).coerceAtLeast(2f)  // top của bubble, không ra khỏi canvas
+            val bX = (peakPt.x - bW / 2f).coerceIn(leftPad, size.width - rightPad - bW)
+
+            val bgPaint = NativePaint().apply { color = lineArgb; isAntiAlias = true }
+            nc.drawRoundRect(RectF(bX, bY, bX + bW, bY + bH), 10f, 10f, bgPaint)
+
+            // Triangle pointer từ bubble xuống dot
+            val triPaint = NativePaint().apply { color = lineArgb; isAntiAlias = true }
+            val triPath = android.graphics.Path().apply {
+                moveTo(peakPt.x - 5f, bY + bH)   // base trái
+                lineTo(peakPt.x + 5f, bY + bH)   // base phải
+                lineTo(peakPt.x,      triBaseY)   // đỉnh chỉ xuống dot
+                close()
+            }
+            nc.drawPath(triPath, triPaint)
+
+            nc.drawText(bubbleText, bX + bW / 2f, bY + bH - bPadV, bubbleTxtPaint)
         }
-        // With yMax = rawMax, maxDataY ≡ topPad (the largest point sits at the chart top edge).
-        val maxDataY = topPad + chartH - ((rawMax.toFloat() - yMin) / yRange) * chartH
-        // Place label baseline 2px above the data line; ascender extends up into the topPad area.
-        val labelBaselineY = (maxDataY - 2f).coerceAtLeast(axisTextSz)
-        nc.drawText(rawMax.toString(), 2f, labelBaselineY, axisPaint)
 
         // ── X-axis: real-time labels (5 evenly spaced) ────────────────────
         if (timeRange != null) {
             val xPaint = NativePaint().apply {
-                color     = axisClr
-                textSize  = axisTextSz
+                color       = axisClr
+                textSize    = axisTextSz
                 isAntiAlias = true
-                textAlign = NativePaint.Align.CENTER
             }
             val spanMs = when (timeRange) {
                 TimeRange.ONE_HOUR          -> 60L * 60_000L
                 TimeRange.TWENTY_FOUR_HOURS -> 24L * 3_600_000L
                 else                        -> 0L
             }
-            val labelCount = if (timeRange == TimeRange.TWENTY_FOUR_HOURS) 5 else 5
+            val labelCount = 5
             repeat(labelCount) { i ->
                 val frac     = i.toFloat() / (labelCount - 1)
                 val offsetMs = ((1f - frac) * spanMs).toLong()
@@ -161,7 +189,14 @@ fun LineChart(
                     cal.get(Calendar.HOUR_OF_DAY),
                     cal.get(Calendar.MINUTE)
                 )
-                nc.drawText(text, leftPad + frac * chartW, size.height - 2f, xPaint)
+                // Căn chỉnh: đầu = LEFT, cuối = RIGHT, giữa = CENTER
+                xPaint.textAlign = when (i) {
+                    0             -> NativePaint.Align.LEFT
+                    labelCount - 1 -> NativePaint.Align.RIGHT
+                    else           -> NativePaint.Align.CENTER
+                }
+                val x = leftPad + frac * chartW
+                nc.drawText(text, x, size.height - 2f, xPaint)
             }
         }
 

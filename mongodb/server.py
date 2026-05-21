@@ -160,7 +160,7 @@ def register():
         password      = data.get("password") or ""
         caregiver_name  = data.get("caregiverName", "")
         wearer_name     = data.get("wearerName", "")
-        wearer_age      = data.get("wearerAge", "")
+        wearer_age      = data.get("wearerBornYear", data.get("wearerAge", ""))
         wearer_gender   = data.get("wearerGender", "")
         caregiver_phone = data.get("caregiverPhone", "")
 
@@ -175,7 +175,7 @@ def register():
             "passwordHash":   hash_password(password),
             "caregiverName":  caregiver_name,
             "wearerName":     wearer_name,
-            "wearerAge":      wearer_age,
+            "wearerBornYear": wearer_age,
             "wearerGender":   wearer_gender,
             "caregiverPhone": caregiver_phone,
             "createdAt":      datetime.now(timezone.utc).replace(microsecond=0),
@@ -211,11 +211,53 @@ def login():
             "userId":         username,
             "caregiverName":  user.get("caregiverName", ""),
             "wearerName":     user.get("wearerName", ""),
-            "wearerAge":      user.get("wearerAge", ""),
+            "wearerBornYear": user.get("wearerBornYear", user.get("wearerAge", "")),
             "wearerGender":   user.get("wearerGender", ""),
             "caregiverPhone": user.get("caregiverPhone", ""),
         }), 200
 
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/auth/profile", methods=["GET"])
+def get_profile():
+    try:
+        username = request.args.get("username", "").strip()
+        if not username:
+            return jsonify({"ok": False, "error": "username required"}), 400
+        user = users_col.find_one({"username": username})
+        if not user:
+            return jsonify({"ok": False, "error": "user not found"}), 404
+        return jsonify({
+            "ok":            True,
+            "userId":        username,
+            "caregiverName": user.get("caregiverName", ""),
+            "wearerName":    user.get("wearerName", ""),
+            "wearerBornYear": user.get("wearerBornYear", user.get("wearerAge", "")),
+            "wearerGender":  user.get("wearerGender", ""),
+            "caregiverPhone": user.get("caregiverPhone", ""),
+        }), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/auth/profile", methods=["PUT"])
+def update_profile():
+    try:
+        data     = request.get_json(force=True)
+        username = (data.get("username") or "").strip()
+        if not username:
+            return jsonify({"ok": False, "error": "username required"}), 400
+        if not users_col.find_one({"username": username}):
+            return jsonify({"ok": False, "error": "user not found"}), 404
+        update = {}
+        for field in ["caregiverName", "wearerName", "wearerBornYear", "wearerGender", "caregiverPhone"]:
+            if field in data:
+                update[field] = data[field]
+        if update:
+            users_col.update_one({"username": username}, {"$set": update})
+        return jsonify({"ok": True, "message": "profile updated"}), 200
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 

@@ -22,7 +22,7 @@ data class AlertUiState(
     val isFallAlertActive: Boolean = false,
     val countdown: Int = 15,
     val isCallingHelp: Boolean = false,
-    val fallEvents: List<FallEvent> = MockDataProvider.fallEvents,
+    val fallEvents: List<FallEvent> = emptyList(),
     val selectedEventId: String? = null,
     val emergencyContacts: List<EmergencyContact> = MockDataProvider.emergencyContacts,
     val notificationSettings: NotificationSettings = NotificationSettings()
@@ -34,91 +34,109 @@ class AlertViewModel(application: Application) : AndroidViewModel(application) {
     val uiState: StateFlow<AlertUiState> = _uiState.asStateFlow()
 
     private var bleService: BleForegroundService? = null
+    private var connectedDeviceName = "AIFD Wearable"
+
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             val binder = service as BleForegroundService.LocalBinder
             bleService = binder.getService()
             observeServiceState()
         }
-
         override fun onServiceDisconnected(name: ComponentName?) {
             bleService = null
         }
     }
 
     init {
+        EventRepository.init(application)
+        // Load events from repository and keep in sync
+        viewModelScope.launch {
+            EventRepository.events.collect { events ->
+                _uiState.update { it.copy(fallEvents = events) }
+            }
+        }
         val intent = Intent(application, BleForegroundService::class.java)
         application.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
     }
 
     private fun observeServiceState() {
         val service = bleService ?: return
-        
+
         viewModelScope.launch {
             service.isFallAlertActive.collect { active ->
                 _uiState.update { it.copy(isFallAlertActive = active) }
             }
         }
-        
+
         viewModelScope.launch {
             service.countdownSeconds.collect { seconds ->
                 _uiState.update { it.copy(countdown = seconds) }
-                if (seconds == 0) {
-                    // This will be handled by service calling placeEmergencyCall
-                    // but we can update UI state here if needed
+            }
+        }
+
+        // Lấy tên thiết bị đang kết nối để ghi vào event
+        viewModelScope.launch {
+            service.bleManager.bleState.collect { state ->
+                if (state is com.aifd.ble.BleManager.BleState.Connected) {
+                    connectedDeviceName = state.deviceName
                 }
+            }
+        }
+
+        // SAFE signal — ESP32 bấm nút hoặc xác nhận an toàn
+        viewModelScope.launch {
+            service.bleManager.safeReceived.collect {
+                Log.i("AlertVM", "SAFE received → logging Safe event")
+                EventRepository.addEvent(
+                    FallEvent(
+                        id = System.currentTimeMillis().toString(),
+                        timestamp = Date(),
+                        type = EventType.SAFE,
+                        title = "Xác nhận an toàn",
+                        status = EventStatus.RESOLVED,
+                        deviceName = connectedDeviceName,
+                        detail = "Thiết bị xác nhận không có té ngã"
+                    )
+                )
             }
         }
     }
 
     fun triggerFallAlert() {
-        // UI can trigger alert too (e.g. panic button), but usually it comes from Service
-        // For now, if UI triggers it, we notify the service? 
-        // No, the user logic is "ESP32 detects fall".
+        // Triggered by BLE ALERT packet via BleForegroundService; no-op from UI side
     }
 
     fun dismissAsSafe() {
         bleService?.cancelEmergencyCountdown()
-        
-        val newEvent = FallEvent(
-            id = System.currentTimeMillis().toString(),
-            timestamp = Date(),
-            type = EventType.FALL,
-            title = "Fall Detected",
-            status = EventStatus.RESOLVED,
-            deviceName = "AIFD Wearable Pro",
-            userResponse = "I'm Safe"
-        )
-        _uiState.update {
-            it.copy(
-                isFallAlertActive = false,
-                isCallingHelp = false,
-                fallEvents = listOf(newEvent) + it.fallEvents
+        EventRepository.addEvent(
+            FallEvent(
+                id = System.currentTimeMillis().toString(),
+                timestamp = Date(),
+                type = EventType.FALL,
+                title = "Phát hiện té ngã",
+                status = EventStatus.RESOLVED,
+                deviceName = connectedDeviceName,
+                userResponse = "Tôi ổn"
             )
-        }
+        )
+        _uiState.update { it.copy(isFallAlertActive = false, isCallingHelp = false) }
     }
 
     fun callForHelp() {
         bleService?.callNow()
-        
         _uiState.update { it.copy(isCallingHelp = true) }
-        
-        val newEvent = FallEvent(
-            id = System.currentTimeMillis().toString(),
-            timestamp = Date(),
-            type = EventType.FALL,
-            title = "Manual Emergency Call",
-            status = EventStatus.PENDING,
-            deviceName = "AIFD Wearable Pro",
-            userResponse = "Called for Help"
-        )
-        _uiState.update {
-            it.copy(
-                isFallAlertActive = false,
-                isCallingHelp = false,
-                fallEvents = listOf(newEvent) + it.fallEvents
+        EventRepository.addEvent(
+            FallEvent(
+                id = System.currentTimeMillis().toString(),
+                timestamp = Date(),
+                type = EventType.FALL,
+                title = "Gọi cấp cứu thủ công",
+                status = EventStatus.PENDING,
+                deviceName = connectedDeviceName,
+                userResponse = "Đã gọi cấp cứu"
             )
-        }
+        )
+        _uiState.update { it.copy(isFallAlertActive = false, isCallingHelp = false) }
     }
 
     fun selectEvent(id: String?) {

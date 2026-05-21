@@ -3,6 +3,7 @@ package com.aifd.ui.screens
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -15,6 +16,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -215,7 +218,6 @@ private fun CloudLoadingCard() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TimeRangeSelector(
     selected: TimeRange,
@@ -223,38 +225,106 @@ private fun TimeRangeSelector(
     showLive: Boolean = true
 ) {
     val strings = AppLocalizations.strings
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    val tabs = remember(showLive) {
+        if (showLive) listOf(TimeRange.LIVE, TimeRange.ONE_HOUR, TimeRange.TWENTY_FOUR_HOURS)
+        else listOf(TimeRange.ONE_HOUR, TimeRange.TWENTY_FOUR_HOURS)
+    }
+    // Clamp selectedIdx agar tidak out-of-bounds jika LIVE dihapus untuk caregiver
+    val selectedIdx = tabs.indexOf(selected).coerceAtLeast(0)
+
+    val animIdx by animateFloatAsState(
+        targetValue  = selectedIdx.toFloat(),
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness    = Spring.StiffnessMediumLow
+        ),
+        label = "tab_slide"
+    )
+
+    val surfaceColor    = MaterialTheme.colorScheme.surface
+    val bgColor         = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+    val onSurface       = MaterialTheme.colorScheme.onSurface
+    val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
+
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(58.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(bgColor)
+            .padding(4.dp)
     ) {
-        TimeRange.entries.forEach { range ->
-            if (range == TimeRange.LIVE && !showLive) return@forEach
-            val label = when (range) {
-                TimeRange.LIVE -> strings.live
-                TimeRange.ONE_HOUR -> strings.oneHour
-                TimeRange.TWENTY_FOUR_HOURS -> strings.twentyFourHours
-            }
-            FilterChip(
-                selected = selected == range,
-                onClick = { onSelected(range) },
-                label = {
-                    if (range == TimeRange.LIVE && selected == range) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Default.FiberManualRecord,
-                                contentDescription = null,
-                                tint = AIFDThemeExt.colors.safe,
-                                modifier = Modifier.size(8.dp)
-                            )
-                            Spacer(Modifier.width(4.dp))
-                            Text(label)
-                        }
+        val tabW = maxWidth / tabs.size
+
+        // ── Sliding white indicator ────────────────────────────────────────
+        Box(
+            modifier = Modifier
+                .width(tabW)
+                .fillMaxHeight()
+                .offset(x = tabW * animIdx)
+                .shadow(2.dp, RoundedCornerShape(10.dp), clip = false)
+                .clip(RoundedCornerShape(10.dp))
+                .background(surfaceColor)
+        )
+
+        // ── Tab items ──────────────────────────────────────────────────────
+        Row(modifier = Modifier.fillMaxWidth().fillMaxHeight()) {
+            tabs.forEach { range ->
+                val isSelected  = selected == range
+                val contentAlpha by animateFloatAsState(
+                    targetValue  = if (isSelected) 1f else 0.45f,
+                    animationSpec = tween(200),
+                    label        = "tab_alpha"
+                )
+                val icon = when (range) {
+                    TimeRange.LIVE          -> Icons.Default.Wifi
+                    TimeRange.ONE_HOUR      -> Icons.Default.AccessTime
+                    TimeRange.TWENTY_FOUR_HOURS -> Icons.Default.CalendarMonth
+                }
+                val label = when (range) {
+                    TimeRange.LIVE          -> strings.live
+                    TimeRange.ONE_HOUR      -> strings.oneHour
+                    TimeRange.TWENTY_FOUR_HOURS -> strings.twentyFourHours
+                }
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { onSelected(range) },
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    // LIVE icon blink animation
+                    if (range == TimeRange.LIVE && isSelected) {
+                        val blink by rememberInfiniteTransition(label = "blink").animateFloat(
+                            initialValue = 1f, targetValue = 0.3f,
+                            animationSpec = infiniteRepeatable(tween(800, easing = LinearEasing), RepeatMode.Reverse),
+                            label = "blink"
+                        )
+                        Icon(
+                            Icons.Default.FiberManualRecord,
+                            contentDescription = null,
+                            modifier = Modifier.size(10.dp),
+                            tint = AIFDThemeExt.colors.safe.copy(alpha = blink)
+                        )
                     } else {
-                        Text(label)
+                        Icon(
+                            icon,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = (if (isSelected) onSurface else onSurfaceVariant).copy(alpha = contentAlpha)
+                        )
                     }
-                },
-                modifier = Modifier.weight(1f)
-            )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text      = label,
+                        style     = MaterialTheme.typography.labelSmall,
+                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                        color     = (if (isSelected) onSurface else onSurfaceVariant).copy(alpha = contentAlpha)
+                    )
+                }
+            }
         }
     }
 }

@@ -86,6 +86,16 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
     private var lastFetch1hMs  = 0L
     private var lastFetch24hMs = 0L
 
+    // Vitals anomaly tracking — tránh tạo event spam
+    private var lastHrStatus: HealthStatus = HealthStatus.NORMAL
+    private var lastSpo2Status: HealthStatus = HealthStatus.NORMAL
+    private var lastVitalsEventMs: Long = 0L
+    private val VITALS_EVENT_COOLDOWN_MS = 5 * 60_000L  // 5 phút giữa các event vitals
+
+    // Sync failure tracking — chỉ log sau N lần thất bại liên tiếp
+    private var syncFailCount = 0
+    private val SYNC_FAIL_THRESHOLD = 3
+
     private val isoFmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).also {
         it.timeZone = TimeZone.getTimeZone("UTC")
     }
@@ -106,6 +116,7 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
 
     init {
         val ctx = application.applicationContext
+        EventRepository.init(ctx)
         val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         currentUserId = prefs.getString("username", "") ?: ""
 
@@ -211,12 +222,28 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
         val ble = service?.bleManager ?: return
         if (currentUserId == "000") return
 
-        // Capture device MAC from connection state
+        // Capture device MAC; create DISCONNECT event when connection drops
+        var wasConnected = false
         viewModelScope.launch {
             ble.bleState.collect { state ->
-                _uiState.update { it.copy(isConnected = state is BleManager.BleState.Connected) }
-                if (state is BleManager.BleState.Connected) {
-                    connectedDeviceMac = state.deviceAddress
+                val isConnected = state is BleManager.BleState.Connected
+                _uiState.update { it.copy(isConnected = isConnected) }
+                if (isConnected) {
+                    connectedDeviceMac = (state as BleManager.BleState.Connected).deviceAddress
+                    wasConnected = true
+                } else if (wasConnected) {
+                    wasConnected = false
+                    EventRepository.addEvent(
+                        FallEvent(
+                            id = System.currentTimeMillis().toString(),
+                            timestamp = Date(),
+                            type = EventType.DISCONNECT,
+                            title = "Mất kết nối thiết bị",
+                            status = EventStatus.RESOLVED,
+                            deviceName = connectedDeviceMac.ifBlank { "AIFD Wearable" },
+                            detail = "BLE connection lost"
+                        )
+                    )
                 }
             }
         }
@@ -235,16 +262,20 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
             }
         }
 
-        // Single reading → update current display
+        // Single reading → update current display + check vitals thresholds
         viewModelScope.launch {
             ble.sensorData.collect { data ->
                 if (data.heartRate == 0 && data.spo2 == 0) return@collect
                 if (data.heartRate > 0 || data.spo2 > 0) {
                     vitalsStore.addReading(data.heartRate, data.spo2)
                 }
+                val hr   = if (data.heartRate > 0) data.heartRate else _uiState.value.currentHR
+                val spo2 = if (data.spo2 > 0) data.spo2 else _uiState.value.currentSpO2
+
+                // Check threshold transitions (chỉ log khi THAY ĐỔI sang bất thường + cooldown)
+                checkVitalsAnomalies(hr, spo2, connectedDeviceMac.ifBlank { "AIFD Wearable" })
+
                 _uiState.update { state ->
-                    val hr   = if (data.heartRate > 0) data.heartRate else state.currentHR
-                    val spo2 = if (data.spo2      > 0) data.spo2      else state.currentSpO2
                     val newHealth = (state.healthData ?: emptyHealthData()).copy(
                         heartRate       = hr,
                         heartRateStatus = hrStatus(hr),
@@ -297,7 +328,75 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
                 timestampIso = tsIso
             )
             Log.d(TAG, "uploadVital hr=$hr spo2=$spo2 → ok=${result.ok} err=${result.error}")
+            if (result.ok) {
+                syncFailCount = 0
+            } else if (!result.error.contains("network", ignoreCase = true)) {
+                // Chỉ đếm lỗi server (không phải lỗi mạng)
+                syncFailCount++
+                if (syncFailCount >= SYNC_FAIL_THRESHOLD) {
+                    syncFailCount = 0
+                    EventRepository.addEvent(
+                        FallEvent(
+                            id = System.currentTimeMillis().toString(),
+                            timestamp = Date(),
+                            type = EventType.SYNC_FAILED,
+                            title = "Không đồng bộ được cloud",
+                            status = EventStatus.PENDING,
+                            deviceName = mac,
+                            detail = "Lỗi upload: ${result.error.take(60)}"
+                        )
+                    )
+                }
+            }
         }
+    }
+
+    private fun checkVitalsAnomalies(hr: Int, spo2: Int, deviceName: String) {
+        val now = System.currentTimeMillis()
+        val cooldownOk = (now - lastVitalsEventMs) > VITALS_EVENT_COOLDOWN_MS
+
+        val newHrStatus   = hrStatus(hr)
+        val newSpo2Status = spo2Status(spo2)
+
+        // HR transition TO abnormal
+        if (cooldownOk && newHrStatus != HealthStatus.NORMAL && newHrStatus != lastHrStatus) {
+            val (title, detail) = when (newHrStatus) {
+                HealthStatus.HIGH -> "Nhịp tim cao bất thường" to "HR: $hr bpm (ngưỡng > 100)"
+                HealthStatus.LOW  -> "Nhịp tim thấp bất thường" to "HR: $hr bpm (ngưỡng < 60)"
+                else -> return
+            }
+            EventRepository.addEvent(
+                FallEvent(
+                    id = now.toString(),
+                    timestamp = Date(now),
+                    type = EventType.VITALS,
+                    title = title,
+                    status = EventStatus.PENDING,
+                    deviceName = deviceName,
+                    detail = detail
+                )
+            )
+            lastVitalsEventMs = now
+        }
+
+        // SpO2 transition TO abnormal
+        if (cooldownOk && newSpo2Status != HealthStatus.NORMAL && newSpo2Status != lastSpo2Status) {
+            EventRepository.addEvent(
+                FallEvent(
+                    id = (now + 1).toString(),
+                    timestamp = Date(now),
+                    type = EventType.VITALS,
+                    title = "SpO2 thấp cảnh báo",
+                    status = EventStatus.PENDING,
+                    deviceName = deviceName,
+                    detail = "SpO2: $spo2% (ngưỡng < 95%)"
+                )
+            )
+            lastVitalsEventMs = now
+        }
+
+        lastHrStatus   = newHrStatus
+        lastSpo2Status = newSpo2Status
     }
 
     private fun uploadFallEventToCloud(type: String, fallProb: Double?, tsMs: Long) {

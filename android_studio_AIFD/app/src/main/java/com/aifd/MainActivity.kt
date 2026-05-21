@@ -120,7 +120,7 @@ class MainActivity : ComponentActivity() {
                         username = username,
                         caregiverName = prefs.getString("caregiver_name", "") ?: "",
                         wearerName = prefs.getString("wearer_name", "") ?: "",
-                        wearerAge = prefs.getString("wearer_age", "") ?: "",
+                        wearerBornYear = prefs.getString("wearer_born_year", "") ?: "",
                         wearerGender = prefs.getString("wearer_gender", "") ?: "",
                         caregiverPhone = prefs.getString("caregiver_phone", "0702341350") ?: "0702341350"
                     )
@@ -200,18 +200,17 @@ class MainActivity : ComponentActivity() {
                                     if (it == null) remove("user_role") else putString("user_role", it.name)
                                 }
                             },
-                            onLoginSuccess = { name ->
+                            onLoginSuccess = { name, profile ->
                                 isLoggedIn = true
                                 username = name
                                 if (name == "000" && com.aifd.data.MockDataProvider.DEMO_MODE) {
-                                    // Full setup for demo account (only in DEMO_MODE)
                                     val demoProfile = UserProfile(
                                         username = "000",
                                         caregiverName = "Nguyễn Văn A",
                                         caregiverPhone = "0702341350",
                                         wearerName = "Trần Thị B",
-                                        wearerAge = "75",
-                                        wearerGender = "Nữ"
+                                        wearerBornYear = "1950",
+                                        wearerGender = "female"
                                     )
                                     userProfile = demoProfile
                                     selectedRole = UserRole.WEARER
@@ -219,35 +218,25 @@ class MainActivity : ComponentActivity() {
                                         putString("user_role", UserRole.WEARER.name)
                                         putString("caregiver_name", demoProfile.caregiverName)
                                         putString("wearer_name", demoProfile.wearerName)
-                                        putString("wearer_age", demoProfile.wearerAge)
+                                        putString("wearer_born_year", demoProfile.wearerBornYear)
                                         putString("wearer_gender", demoProfile.wearerGender)
                                         putString("caregiver_phone", demoProfile.caregiverPhone)
                                         putString("device_name", "ESP32-S3 Wearable")
                                         putString("device_mac", "AA:BB:CC:DD:EE:FF")
                                     }
-                                } else if (name == "000" || name == "dien572") {
-                                    // For real user (or 000 with DEMO_MODE=off), clear everything and act like a normal user
-                                    userProfile = UserProfile(username = name)
-                                    selectedRole = null
+                                } else {
+                                    // Store profile from login response
+                                    userProfile = profile.copy(username = name)
                                     prefs.edit {
-                                        remove("user_role")
-                                        remove("caregiver_name")
-                                        remove("wearer_name")
-                                        remove("wearer_age")
-                                        remove("wearer_gender")
-                                        remove("caregiver_phone")
-                                        remove("device_name")
-                                        remove("device_mac")
-                                        
-                                        // Clear any stored sensor data for a clean slate
-                                        remove("last_heart_rate")
-                                        remove("last_spo2")
-                                        remove("last_vital_timestamp")
-                                        remove("hr_history")
-                                        remove("spo2_history")
-                                        remove("monitoring_hr_live")
-                                        remove("monitoring_spo2_live")
-                                        remove("fall_events_json")
+                                        putString("caregiver_name", profile.caregiverName)
+                                        putString("wearer_name", profile.wearerName)
+                                        putString("wearer_born_year", profile.wearerBornYear)
+                                        putString("wearer_gender", profile.wearerGender)
+                                        putString("caregiver_phone", profile.caregiverPhone)
+                                    }
+                                    // Only reset role if no stored role (first login)
+                                    if (prefs.getString("user_role", null) == null) {
+                                        selectedRole = null
                                     }
                                 }
                                 prefs.edit(commit = true) {
@@ -264,7 +253,7 @@ class MainActivity : ComponentActivity() {
                                     putString("username", profile.username)
                                     putString("caregiver_name", profile.caregiverName)
                                     putString("wearer_name", profile.wearerName)
-                                    putString("wearer_age", profile.wearerAge)
+                                    putString("wearer_born_year", profile.wearerBornYear)
                                     putString("wearer_gender", profile.wearerGender)
                                     putString("caregiver_phone", profile.caregiverPhone)
                                 }
@@ -276,7 +265,7 @@ class MainActivity : ComponentActivity() {
                                     putString("username", profile.username)
                                     putString("caregiver_name", profile.caregiverName)
                                     putString("wearer_name", profile.wearerName)
-                                    putString("wearer_age", profile.wearerAge)
+                                    putString("wearer_born_year", profile.wearerBornYear)
                                     putString("wearer_gender", profile.wearerGender)
                                     putString("caregiver_phone", profile.caregiverPhone)
                                 }

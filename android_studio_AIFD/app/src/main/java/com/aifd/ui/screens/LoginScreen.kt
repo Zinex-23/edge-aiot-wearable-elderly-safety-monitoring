@@ -17,6 +17,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.aifd.data.CloudApi
+import com.aifd.data.UserProfile
 import com.aifd.ui.localization.AppLocalizations
 import com.aifd.ui.theme.AIFDTheme
 import kotlinx.coroutines.Dispatchers
@@ -26,7 +27,7 @@ import kotlinx.coroutines.withContext
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LoginScreen(
-    onLoginSuccess: (String) -> Unit,
+    onLoginSuccess: (String, UserProfile) -> Unit,
     onNavigateToRegister: () -> Unit = {}
 ) {
     val strings = AppLocalizations.strings
@@ -44,7 +45,7 @@ fun LoginScreen(
             return
         }
         if (username == "000" && password == "000") {
-            onLoginSuccess("000")
+            onLoginSuccess("000", UserProfile(username = "000"))
             return
         }
         isLoading = true
@@ -55,7 +56,15 @@ fun LoginScreen(
             }
             isLoading = false
             if (result.ok) {
-                onLoginSuccess(result.userId)
+                val profile = UserProfile(
+                    username      = result.userId,
+                    caregiverName = result.caregiverName,
+                    wearerName    = result.wearerName,
+                    wearerBornYear = result.wearerBornYear,
+                    wearerGender  = result.wearerGender,
+                    caregiverPhone = result.caregiverPhone
+                )
+                onLoginSuccess(result.userId, profile)
             } else {
                 errorMsg = when {
                     result.error.contains("invalid", ignoreCase = true) -> strings.invalidCredentials
@@ -165,6 +174,6 @@ fun LoginScreen(
 @Composable
 private fun LoginScreenPreview() {
     AIFDTheme {
-        LoginScreen(onLoginSuccess = {})
+        LoginScreen(onLoginSuccess = { _, _ -> })
     }
 }

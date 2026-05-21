@@ -70,10 +70,13 @@ data class EmergencyContact(
  * Types of recorded events.
  */
 enum class EventType {
-    FALL,
-    ALERT,
-    DISCONNECT,
-    LOW_BATTERY
+    FALL,         // ESP32 phát hiện té ngã
+    SAFE,         // ESP32 xác nhận an toàn (false alarm hoặc bấm nút)
+    ALERT,        // Cảnh báo chung
+    VITALS,       // HR/SpO2 vượt ngưỡng an toàn
+    DISCONNECT,   // Mất kết nối BLE
+    LOW_BATTERY,  // Pin thiết bị yếu
+    SYNC_FAILED   // Không đồng bộ được lên cloud
 }
 
 /**
@@ -96,7 +99,8 @@ data class FallEvent(
     val status: EventStatus,
     val location: String? = null,
     val deviceName: String,
-    val userResponse: String? = null
+    val userResponse: String? = null,
+    val detail: String? = null   // Thêm thông tin: "HR: 115 bpm", "SpO2: 91%", v.v.
 )
 
 /**
@@ -132,7 +136,7 @@ data class UserProfile(
     val username: String = "",
     val caregiverName: String = "",
     val wearerName: String = "",
-    val wearerAge: String = "",
+    val wearerBornYear: String = "",
     val wearerGender: String = "",
     val caregiverPhone: String = ""
 )

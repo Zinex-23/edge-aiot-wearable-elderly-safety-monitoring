@@ -215,8 +215,13 @@ class AppStrings(private val currentLanguage: AppLanguage) {
     val dontHaveAccount get() = if (vi) "Chưa có tài khoản? " else "Don't have an account? "
     val caregiverNameLabel get() = if (vi) "Tên người chăm sóc" else "Caregiver Name"
     val wearerNameLabel get() = if (vi) "Tên người đeo" else "Wearer Name"
-    val wearerAgeLabel get() = if (vi) "Tuổi người đeo" else "Wearer Age"
+    val wearerAgeLabel get() = if (vi) "Năm sinh người đeo" else "Wearer Born Year"
     val wearerGenderLabel get() = if (vi) "Giới tính người đeo" else "Wearer Gender"
+    fun genderDisplay(gender: String) = when (gender.lowercase()) {
+        "male", "nam"       -> male
+        "female", "nữ", "nu", "nữ" -> female
+        else                -> gender
+    }
     val caregiverPhoneLabel get() = if (vi) "Số điện thoại người chăm sóc" else "Caregiver Phone"
     val male get() = if (vi) "Nam" else "Male"
     val female get() = if (vi) "Nữ" else "Female"
@@ -276,10 +281,13 @@ class AppStrings(private val currentLanguage: AppLanguage) {
     }
 
     fun eventTitle(type: EventType) = when (type) {
-        EventType.FALL -> fallDetected
-        EventType.DISCONNECT -> deviceDisconnected
+        EventType.FALL        -> fallDetected
+        EventType.SAFE        -> if (vi) "Xác nhận an toàn"         else "Safe Confirmed"
+        EventType.VITALS      -> if (vi) "Cảnh báo sinh hiệu"       else "Vitals Alert"
+        EventType.DISCONNECT  -> deviceDisconnected
+        EventType.SYNC_FAILED -> if (vi) "Không đồng bộ được"       else "Sync Failed"
         EventType.LOW_BATTERY -> lowBattery
-        EventType.ALERT -> emergency
+        EventType.ALERT       -> emergency
     }
 }
 

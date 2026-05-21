@@ -106,6 +106,10 @@ fun EventDetailScreen(
                         Spacer(Modifier.height(12.dp))
                         DetailRow(Icons.Default.Person, strings.userResponse, it)
                     }
+                    event.detail?.let {
+                        Spacer(Modifier.height(12.dp))
+                        DetailRow(Icons.Default.Info, "Chi tiết", it)
+                    }
                 }
             }
 
@@ -221,10 +225,13 @@ private fun TimelineStepItem(
 
 @Composable
 private fun getEventIconAndColor(type: EventType): Pair<ImageVector, Color> = when (type) {
-    EventType.FALL -> Icons.Default.Warning to MaterialTheme.colorScheme.error
-    EventType.DISCONNECT -> Icons.Default.WifiOff to AIFDThemeExt.colors.warning
-    EventType.LOW_BATTERY -> Icons.Default.BatteryAlert to AIFDThemeExt.colors.warning
-    EventType.ALERT -> Icons.Default.Notifications to MaterialTheme.colorScheme.primary
+    EventType.FALL        -> Icons.Default.Warning       to MaterialTheme.colorScheme.error
+    EventType.SAFE        -> Icons.Default.CheckCircle   to AIFDThemeExt.colors.safe
+    EventType.VITALS      -> Icons.Default.Favorite      to AIFDThemeExt.colors.warning
+    EventType.DISCONNECT  -> Icons.Default.WifiOff       to AIFDThemeExt.colors.warning
+    EventType.SYNC_FAILED -> Icons.Default.CloudOff      to MaterialTheme.colorScheme.onSurfaceVariant
+    EventType.LOW_BATTERY -> Icons.Default.BatteryAlert  to AIFDThemeExt.colors.warning
+    EventType.ALERT       -> Icons.Default.Notifications to MaterialTheme.colorScheme.primary
 }
 
 private data class TimelineStep(

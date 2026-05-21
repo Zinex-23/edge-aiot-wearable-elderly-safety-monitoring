@@ -51,7 +51,7 @@ data class AuthResult(
     val userId: String = "",
     val caregiverName: String = "",
     val wearerName: String = "",
-    val wearerAge: String = "",
+    val wearerBornYear: String = "",
     val wearerGender: String = "",
     val caregiverPhone: String = "",
     val error: String = ""
@@ -89,7 +89,7 @@ object CloudApi {
             addProperty("password",       password)
             addProperty("caregiverName",  profile.caregiverName)
             addProperty("wearerName",     profile.wearerName)
-            addProperty("wearerAge",      profile.wearerAge)
+            addProperty("wearerBornYear", profile.wearerBornYear)
             addProperty("wearerGender",   profile.wearerGender)
             addProperty("caregiverPhone", profile.caregiverPhone)
         }
@@ -98,6 +98,32 @@ object CloudApi {
             gson.fromJson(resp, AuthResult::class.java)
         } catch (e: Exception) {
             AuthResult(ok = false, error = e.message ?: "network error")
+        }
+    }
+
+    fun getProfile(username: String): AuthResult {
+        return try {
+            val resp = get("$RENDER_URL/api/auth/profile?username=$username")
+            gson.fromJson(resp, AuthResult::class.java)
+        } catch (e: Exception) {
+            AuthResult(ok = false, error = e.message ?: "network error")
+        }
+    }
+
+    fun updateProfile(profile: UserProfile): CloudResult {
+        val body = JsonObject().apply {
+            addProperty("username",       profile.username)
+            addProperty("caregiverName",  profile.caregiverName)
+            addProperty("wearerName",     profile.wearerName)
+            addProperty("wearerBornYear", profile.wearerBornYear)
+            addProperty("wearerGender",   profile.wearerGender)
+            addProperty("caregiverPhone", profile.caregiverPhone)
+        }
+        return try {
+            val resp = put("$RENDER_URL/api/auth/profile", body.toString())
+            gson.fromJson(resp, CloudResult::class.java)
+        } catch (e: Exception) {
+            CloudResult(ok = false, error = e.message ?: "network error")
         }
     }
 
@@ -223,6 +249,16 @@ object CloudApi {
 
     private fun get(url: String): String {
         val request = Request.Builder().url(url).get().build()
+        http.newCall(request).execute().use { resp ->
+            return resp.body?.string() ?: throw Exception("empty response")
+        }
+    }
+
+    private fun put(url: String, jsonBody: String): String {
+        val request = Request.Builder()
+            .url(url)
+            .put(jsonBody.toRequestBody(JSON_MEDIA))
+            .build()
         http.newCall(request).execute().use { resp ->
             return resp.body?.string() ?: throw Exception("empty response")
         }

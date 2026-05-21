@@ -42,7 +42,7 @@ fun RegisterScreen(
     var showConfirmPw   by rememberSaveable { mutableStateOf(false) }
     var caregiverName   by rememberSaveable { mutableStateOf("") }
     var wearerName      by rememberSaveable { mutableStateOf("") }
-    var wearerAge       by rememberSaveable { mutableStateOf("") }
+    var wearerBornYear  by rememberSaveable { mutableStateOf("") }
     var wearerGender    by rememberSaveable { mutableStateOf("") }
     var caregiverPhone  by rememberSaveable { mutableStateOf("") }
 
@@ -64,7 +64,7 @@ fun RegisterScreen(
             username       = username.trim(),
             caregiverName  = caregiverName,
             wearerName     = wearerName,
-            wearerAge      = wearerAge,
+            wearerBornYear = wearerBornYear,
             wearerGender   = wearerGender,
             caregiverPhone = caregiverPhone
         )
@@ -186,24 +186,27 @@ fun RegisterScreen(
             singleLine = true,
             enabled = !isLoading
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                value = wearerAge,
-                onValueChange = { wearerAge = it },
-                label = { Text(strings.wearerAgeLabel) },
-                modifier = Modifier.weight(1f),
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                enabled = !isLoading
-            )
-            OutlinedTextField(
-                value = wearerGender,
-                onValueChange = { wearerGender = it },
-                label = { Text(strings.wearerGenderLabel) },
-                modifier = Modifier.weight(1f),
-                singleLine = true,
-                enabled = !isLoading
-            )
+        OutlinedTextField(
+            value = wearerBornYear,
+            onValueChange = { wearerBornYear = it },
+            label = { Text(strings.wearerAgeLabel) },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            enabled = !isLoading
+        )
+        // Gender toggle
+        Text(strings.wearerGenderLabel, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("male" to strings.male, "female" to strings.female).forEach { (value, label) ->
+                FilterChip(
+                    selected = wearerGender == value,
+                    onClick = { wearerGender = value },
+                    label = { Text(label) },
+                    modifier = Modifier.weight(1f),
+                    enabled = !isLoading
+                )
+            }
         }
 
         if (errorMsg.isNotBlank()) {

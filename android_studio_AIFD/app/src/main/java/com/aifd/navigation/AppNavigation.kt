@@ -86,7 +86,7 @@ fun AppNavigation(
     onThemeModeChange: (AppThemeMode) -> Unit,
     onLanguageChange: (AppLanguage) -> Unit,
     onRoleChange: (UserRole?) -> Unit,
-    onLoginSuccess: (String) -> Unit,
+    onLoginSuccess: (String, UserProfile) -> Unit,
     onRegisterSuccess: (UserProfile) -> Unit,
     onUpdateProfile: (UserProfile) -> Unit,
     onLogout: () -> Unit
@@ -209,33 +209,58 @@ fun AppNavigation(
             }
         }
     ) { innerPadding ->
+        val bottomNavRoutes = listOf(
+            Screen.Home.route,
+            Screen.Monitoring.route,
+            Screen.Alerts.route,
+            Screen.Settings.route
+        )
+
         NavHost(
             navController = navController,
             startDestination = Screen.Home.route,
             modifier = Modifier.padding(innerPadding),
             enterTransition = {
-                slideIntoContainer(
-                    towards = AnimatedContentTransitionScope.SlideDirection.Left,
-                    animationSpec = tween(400)
-                ) + fadeIn(animationSpec = tween(400))
+                val fromIdx = bottomNavRoutes.indexOf(initialState.destination.route)
+                val toIdx   = bottomNavRoutes.indexOf(targetState.destination.route)
+                when {
+                    fromIdx >= 0 && toIdx >= 0 -> {
+                        val dir = if (toIdx > fromIdx) AnimatedContentTransitionScope.SlideDirection.Left
+                                  else AnimatedContentTransitionScope.SlideDirection.Right
+                        slideIntoContainer(dir, tween(280)) + fadeIn(tween(200))
+                    }
+                    toIdx < 0 ->
+                        slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Up, tween(320)) +
+                        fadeIn(tween(200))
+                    else -> fadeIn(tween(250))
+                }
             },
             exitTransition = {
-                slideOutOfContainer(
-                    towards = AnimatedContentTransitionScope.SlideDirection.Left,
-                    animationSpec = tween(400)
-                ) + fadeOut(animationSpec = tween(400))
+                val fromIdx = bottomNavRoutes.indexOf(initialState.destination.route)
+                val toIdx   = bottomNavRoutes.indexOf(targetState.destination.route)
+                when {
+                    fromIdx >= 0 && toIdx >= 0 -> {
+                        val dir = if (toIdx > fromIdx) AnimatedContentTransitionScope.SlideDirection.Left
+                                  else AnimatedContentTransitionScope.SlideDirection.Right
+                        slideOutOfContainer(dir, tween(280)) + fadeOut(tween(200))
+                    }
+                    toIdx < 0 -> fadeOut(tween(200))
+                    else -> fadeOut(tween(250))
+                }
             },
             popEnterTransition = {
-                slideIntoContainer(
-                    towards = AnimatedContentTransitionScope.SlideDirection.Right,
-                    animationSpec = tween(400)
-                ) + fadeIn(animationSpec = tween(400))
+                val fromIdx = bottomNavRoutes.indexOf(initialState.destination.route)
+                if (fromIdx < 0) fadeIn(tween(280)) else fadeIn(tween(250))
             },
             popExitTransition = {
-                slideOutOfContainer(
-                    towards = AnimatedContentTransitionScope.SlideDirection.Right,
-                    animationSpec = tween(400)
-                ) + fadeOut(animationSpec = tween(400))
+                val fromIdx = bottomNavRoutes.indexOf(initialState.destination.route)
+                if (fromIdx < 0) {
+                    slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Down, tween(320)) +
+                    fadeOut(tween(200))
+                } else {
+                    slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(280)) +
+                    fadeOut(tween(200))
+                }
             }
         ) {
             composable(Screen.Home.route) {
@@ -285,7 +310,8 @@ fun AppNavigation(
                     onEventClick = { eventId ->
                         alertViewModel.selectEvent(eventId)
                         navController.navigate(Screen.EventDetail.route)
-                    }
+                    },
+                    onClearAll = { EventRepository.clearAll() }
                 )
             }
 
