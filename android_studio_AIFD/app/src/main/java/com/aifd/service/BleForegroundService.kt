@@ -278,6 +278,13 @@ class BleForegroundService : Service() {
         sendBroadcast(Intent(ACTION_DISMISS_SAFE).apply { `package` = packageName })
     }
 
+    /** Called when wearer presses the manual emergency button on HomeScreen. */
+    fun triggerManualAlert() {
+        if (_isFallAlertActive.value) return
+        Log.w(TAG, "Manual emergency button pressed — starting countdown")
+        handleFallDetected()
+    }
+
     fun callNow() {
         emergencyCountdownJob?.cancel()
         emergencyCountdownJob = null

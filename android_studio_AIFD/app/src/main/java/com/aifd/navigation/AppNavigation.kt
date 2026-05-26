@@ -168,6 +168,18 @@ fun AppNavigation(
         }
     }
 
+    // Reliable fall alert navigation: triggers when service sets isFallAlertActive=true
+    // (fallback for cases where the intent-based startOnFallAlert path doesn't fire, e.g.
+    // activity already in foreground and FLAG_ACTIVITY_CLEAR_TOP doesn't re-deliver onNewIntent)
+    val alertNavUiState by alertViewModel.uiState.collectAsState()
+    LaunchedEffect(alertNavUiState.isFallAlertActive) {
+        if (alertNavUiState.isFallAlertActive) {
+            navController.navigate(Screen.FallAlert.route) {
+                launchSingleTop = true
+            }
+        }
+    }
+
     val strings = AppLocalizations.strings
     val prefs = remember { context.getSharedPreferences("aifd_prefs", Context.MODE_PRIVATE) }
 
@@ -290,7 +302,7 @@ fun AppNavigation(
                     onTriggerFallAlert = {
                         if (selectedRole == UserRole.WEARER) {
                             alertViewModel.triggerFallAlert()
-                            navController.navigate(Screen.FallAlert.route)
+                            navController.navigate(Screen.FallAlert.route) { launchSingleTop = true }
                         }
                     }
                 )

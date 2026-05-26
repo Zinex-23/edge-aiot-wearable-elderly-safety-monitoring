@@ -103,7 +103,7 @@ class AlertViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun triggerFallAlert() {
-        // Triggered by BLE ALERT packet via BleForegroundService; no-op from UI side
+        bleService?.triggerManualAlert()
     }
 
     fun dismissAsSafe() {
