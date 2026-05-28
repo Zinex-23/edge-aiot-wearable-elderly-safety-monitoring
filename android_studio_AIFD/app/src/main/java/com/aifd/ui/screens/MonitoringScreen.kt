@@ -447,7 +447,7 @@ private fun HeartRateContent(
     }
 
     // Info/connect cards — hidden entirely for caregiver
-    if (!isCaregiver) if (!uiState.isConnected || uiState.healthData == null || uiState.healthData.heartRate == 0) {
+    if (!isCaregiver) if (!uiState.isConnected) {
         ElevatedCard(
             shape = RoundedCornerShape(24.dp),
             elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
@@ -642,7 +642,7 @@ private fun SpO2Content(
     }
 
     // Info/connect cards — hidden entirely for caregiver
-    if (!isCaregiver) if (!uiState.isConnected || uiState.healthData == null || uiState.healthData.spO2 == 0) {
+    if (!isCaregiver) if (!uiState.isConnected) {
         ElevatedCard(
             shape = RoundedCornerShape(24.dp),
             elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),

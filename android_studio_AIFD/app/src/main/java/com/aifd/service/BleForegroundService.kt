@@ -302,17 +302,26 @@ class BleForegroundService : Service() {
         val number = prefs.getString("caregiver_phone", "0702341350") ?: "0702341350"
         
         try {
-            val callIntent = Intent(Intent.ACTION_CALL).apply {
-                data = android.net.Uri.parse("tel:$number")
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            startActivity(callIntent)
+            val telecomManager = getSystemService(Context.TELECOM_SERVICE) as android.telecom.TelecomManager
+            val uri = android.net.Uri.parse("tel:$number")
+            telecomManager.placeCall(uri, null)
+            Log.i(TAG, "Placed emergency call to $number via TelecomManager")
         } catch (e: Exception) {
-            val dialIntent = Intent(Intent.ACTION_DIAL).apply {
-                data = android.net.Uri.parse("tel:$number")
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            Log.e(TAG, "TelecomManager failed, falling back to Intent: ${e.message}")
+            try {
+                val callIntent = Intent(Intent.ACTION_CALL).apply {
+                    data = android.net.Uri.parse("tel:$number")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(callIntent)
+            } catch (e2: Exception) {
+                Log.e(TAG, "ACTION_CALL failed, falling back to ACTION_DIAL: ${e2.message}")
+                val dialIntent = Intent(Intent.ACTION_DIAL).apply {
+                    data = android.net.Uri.parse("tel:$number")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(dialIntent)
             }
-            startActivity(dialIntent)
         }
     }
 

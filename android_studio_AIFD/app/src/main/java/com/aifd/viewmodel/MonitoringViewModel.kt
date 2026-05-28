@@ -134,6 +134,27 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
                 )
             }
             refreshChart()
+        } else {
+            val lastHR = prefs.getInt("last_heart_rate", 0)
+            val lastSpO2 = prefs.getInt("last_spo2", 0)
+            if (lastHR > 0 || lastSpO2 > 0) {
+                val newHealth = HealthData(
+                    heartRate = lastHR,
+                    heartRateStatus = hrStatus(lastHR),
+                    heartRateHistory = emptyList(),
+                    heartRateMin = 0,
+                    heartRateMax = 0,
+                    spO2 = lastSpO2,
+                    spO2Status = spo2Status(lastSpO2),
+                    spO2History = emptyList(),
+                    stepCount = 0,
+                    stepGoal = 10000,
+                    lastUpdated = Date(prefs.getLong("last_vital_timestamp", System.currentTimeMillis()))
+                )
+                _uiState.update {
+                    it.copy(healthData = newHealth, currentHR = lastHR, currentSpO2 = lastSpO2)
+                }
+            }
         }
 
         val intent = Intent(ctx, BleForegroundService::class.java)
@@ -187,7 +208,32 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
             )
             refreshChart()
         } else {
-            _uiState.value = MonitoringUiState()
+            val ctx = getApplication<Application>().applicationContext
+            val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val lastHR = prefs.getInt("last_heart_rate", 0)
+            val lastSpO2 = prefs.getInt("last_spo2", 0)
+            
+            _uiState.value = if (lastHR > 0 || lastSpO2 > 0) {
+                MonitoringUiState(
+                    healthData = HealthData(
+                        heartRate = lastHR,
+                        heartRateStatus = hrStatus(lastHR),
+                        heartRateHistory = emptyList(),
+                        heartRateMin = 0,
+                        heartRateMax = 0,
+                        spO2 = lastSpO2,
+                        spO2Status = spo2Status(lastSpO2),
+                        spO2History = emptyList(),
+                        stepCount = 0,
+                        stepGoal = 10000,
+                        lastUpdated = Date(prefs.getLong("last_vital_timestamp", System.currentTimeMillis()))
+                    ),
+                    currentHR = lastHR,
+                    currentSpO2 = lastSpO2
+                )
+            } else {
+                MonitoringUiState()
+            }
             refreshChart()
         }
     }

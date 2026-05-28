@@ -707,7 +707,7 @@ class BleManager(private val context: Context) {
             mediaPlayer?.release()
             mediaPlayer = null
             
-            val resId = context.resources.getIdentifier("event_sos", "raw", context.packageName)
+            val resId = context.resources.getIdentifier("no_sound", "raw", context.packageName)
             if (resId != 0) {
                 mediaPlayer = MediaPlayer()
                 
@@ -734,9 +734,9 @@ class BleManager(private val context: Context) {
                     mediaPlayer = null
                 }
                 mediaPlayer?.start()
-                Log.i(TAG, "Playing emergency alert: event_sos at TRIPLE-MAX volume")
+                Log.i(TAG, "Playing emergency alert: no_sound at TRIPLE-MAX volume")
             } else {
-                Log.e(TAG, "!!! CRITICAL: Sound file 'event_sos' NOT FOUND in res/raw !!!")
+                Log.e(TAG, "!!! CRITICAL: Sound file 'no_sound' NOT FOUND in res/raw !!!")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error playing alert sound: ${e.message}")

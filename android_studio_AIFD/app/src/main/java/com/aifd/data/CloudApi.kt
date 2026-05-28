@@ -15,7 +15,7 @@ import java.util.concurrent.TimeUnit
 // ── CONFIG ────────────────────────────────────────────────────────────────────
 // Localhost testing: dùng IP máy tính trên cùng WiFi với Android.
 // Khi deploy Render, đổi thành "https://ten-app.onrender.com"
-private const val RENDER_URL = "https://edge-aiot-wearable-elderly-safety.onrender.com"
+private const val RENDER_URL = "https://edge-aiot-wearable-elderly-safety-4c1i.onrender.com/"
 
 // ── DATA MODELS ───────────────────────────────────────────────────────────────
 
