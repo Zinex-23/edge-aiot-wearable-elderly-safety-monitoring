@@ -6,6 +6,12 @@ from pymongo import MongoClient, DESCENDING
 import json
 import time
 
+try:
+    import firebase_admin
+    from firebase_admin import credentials, messaging
+except ImportError:
+    firebase_admin = None
+
 # =========================
 # CONFIG
 # =========================
@@ -27,6 +33,20 @@ vitals_col     = db["vitals"]
 fall_events_col = db["fall_events"]
 
 app = Flask(__name__)
+
+# =========================
+# FIREBASE INIT
+# =========================
+try:
+    if firebase_admin and not firebase_admin._apps:
+        if os.path.exists("serviceAccountKey.json"):
+            cred = credentials.Certificate("serviceAccountKey.json")
+            firebase_admin.initialize_app(cred)
+            print("Firebase Admin initialized successfully.")
+        else:
+            print("WARNING: serviceAccountKey.json not found. FCM Push Notifications will not work.")
+except Exception as e:
+    print(f"Failed to initialize Firebase Admin: {e}")
 
 
 # =========================
@@ -290,6 +310,30 @@ def change_password():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/auth/fcm-token", methods=["POST"])
+def update_fcm_token():
+    try:
+        data      = request.get_json(force=True)
+        username  = (data.get("username") or "").strip()
+        role      = (data.get("role") or "").strip().upper()
+        fcm_token = (data.get("fcmToken") or "").strip()
+
+        if not username or not role or not fcm_token:
+            return jsonify({"ok": False, "error": "username, role and fcmToken required"}), 400
+
+        user = users_col.find_one({"username": username})
+        if not user:
+            return jsonify({"ok": False, "error": "user not found"}), 404
+
+        field_to_update = "wearerFcmToken" if role == "WEARER" else "caregiverFcmToken"
+        users_col.update_one({"username": username}, {"$set": {field_to_update: fcm_token}})
+        
+        return jsonify({"ok": True, "message": f"{role} FCM token updated"}), 200
+
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 # =========================
 # VITALS
 # =========================
@@ -429,6 +473,32 @@ def post_fall_event():
         }
         result = fall_events_col.insert_one(doc)
 
+        # Trigger FCM Push to Caregiver
+        if firebase_admin and firebase_admin._apps:
+            user = users_col.find_one({"username": user_id})
+            if user and user.get("caregiverFcmToken"):
+                try:
+                    wearer_name = user.get("wearerName", "Người đeo")
+                    title = "CẢNH BÁO TÉ NGÃ!" if event_type == "fall_auto" else "CẢNH BÁO SINH HIỆU!"
+                    body = f"{wearer_name} vừa gặp sự cố. Vui lòng kiểm tra ngay!"
+                    
+                    message = messaging.Message(
+                        notification=messaging.Notification(
+                            title=title,
+                            body=body
+                        ),
+                        data={
+                            "eventId": str(result.inserted_id),
+                            "type": event_type,
+                            "deviceId": device_id,
+                            "timestamp": doc["timestamp"].isoformat()
+                        },
+                        token=user.get("caregiverFcmToken"),
+                    )
+                    messaging.send(message)
+                except Exception as e:
+                    print("FCM Error:", e)
+
         return jsonify({"ok": True, "insertedId": str(result.inserted_id)}), 200
 
     except Exception as e:
@@ -457,6 +527,46 @@ def get_fall_events():
             "items": [serialize_fall_event(d) for d in docs],
         }), 200
 
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/fall_event/acknowledge", methods=["POST"])
+def acknowledge_event():
+    try:
+        data = request.get_json(force=True)
+        event_id = data.get("eventId", "")
+        user_id = data.get("userId", "")
+
+        from bson.objectid import ObjectId
+        if not event_id or not user_id:
+            return jsonify({"ok": False, "error": "eventId and userId required"}), 400
+
+        # Update event as resolved
+        fall_events_col.update_one({"_id": ObjectId(event_id)}, {"$set": {"resolved": True}})
+
+        # Trigger FCM Push to Wearer
+        if firebase_admin and firebase_admin._apps:
+            user = users_col.find_one({"username": user_id})
+            if user and user.get("wearerFcmToken"):
+                try:
+                    caregiver_name = user.get("caregiverName", "Người chăm sóc")
+                    message = messaging.Message(
+                        notification=messaging.Notification(
+                            title="Đã nhận được thông báo",
+                            body=f"{caregiver_name} đã xác nhận cảnh báo và đang xử lý."
+                        ),
+                        data={
+                            "eventId": event_id,
+                            "action": "acknowledged"
+                        },
+                        token=user.get("wearerFcmToken"),
+                    )
+                    messaging.send(message)
+                except Exception as e:
+                    print("FCM Error:", e)
+
+        return jsonify({"ok": True, "message": "Event acknowledged"}), 200
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
