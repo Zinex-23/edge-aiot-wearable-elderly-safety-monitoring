@@ -68,11 +68,15 @@ class BleForegroundService : Service() {
 
         /** Convenience to start the service from any context. */
         fun start(context: Context) {
-            val intent = Intent(context, BleForegroundService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            try {
+                val intent = Intent(context, BleForegroundService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("BleForegroundService", "Failed to start service: ${e.message}")
             }
         }
 
@@ -137,7 +141,21 @@ class BleForegroundService : Service() {
         bleManager = BleManager(applicationContext)
 
         createNotificationChannels()
-        startForeground(NOTIFICATION_ID, buildNotification(connected = false, deviceName = null))
+        try {
+            val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            } else {
+                0
+            }
+            androidx.core.app.ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                buildNotification(connected = false, deviceName = null),
+                type
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to startForeground: ${e.message}")
+        }
 
         // Register for Bluetooth state changes
         registerReceiver(bluetoothReceiver, android.content.IntentFilter(android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED))
