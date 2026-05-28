@@ -20,6 +20,15 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -37,6 +46,7 @@ fun AifdChartCard(
     title: String,
     modifier: Modifier = Modifier,
     trailing: String? = null,
+    isLoading: Boolean = false,
     onRefresh: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
@@ -66,7 +76,27 @@ fun AifdChartCard(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    if (onRefresh != null) {
+                    if (isLoading) {
+                        val infiniteTransition = rememberInfiniteTransition(label = "loading")
+                        val angle by infiniteTransition.animateFloat(
+                            initialValue = 0f,
+                            targetValue = 360f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(1000, easing = LinearEasing),
+                                repeatMode = RepeatMode.Restart
+                            ),
+                            label = "rotation"
+                        )
+                        Icon(
+                            imageVector = Icons.Default.Sync,
+                            contentDescription = "Loading",
+                            modifier = Modifier
+                                .padding(start = 8.dp)
+                                .size(16.dp)
+                                .rotate(angle),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    } else if (onRefresh != null) {
                         IconButton(
                             onClick = onRefresh,
                             modifier = Modifier.size(28.dp)

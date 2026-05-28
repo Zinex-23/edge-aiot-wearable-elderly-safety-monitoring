@@ -125,11 +125,6 @@ class MainActivity : ComponentActivity() {
             }
 
             val ctx = LocalContext.current
-            
-            // Prompt user to enable Bluetooth if it is currently off
-            val enableBtLauncher = rememberLauncherForActivityResult(
-                ActivityResultContracts.StartActivityForResult()
-            ) { /* result handled by BleForegroundService BT receiver */ }
 
             val permissionLauncher = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestMultiplePermissions()
@@ -138,17 +133,6 @@ class MainActivity : ComponentActivity() {
                 if (allGranted) {
                     Log.i("MainActivity", "Permissions granted! Re-triggering BLE Service auto-connect…")
                     com.aifd.service.BleForegroundService.start(ctx)
-                    
-                    // Prompt user to enable Bluetooth after permissions are granted
-                    try {
-                        val btManager = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
-                        if (btManager?.adapter?.isEnabled == false) {
-                            @Suppress("DEPRECATION")
-                            enableBtLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
-                        }
-                    } catch (e: Exception) {
-                        Log.e("MainActivity", "Failed to launch BT enable intent: ${e.message}")
-                    }
                 }
             }
 
@@ -177,16 +161,6 @@ class MainActivity : ComponentActivity() {
                 if (allGranted) {
                     Log.i("MainActivity", "Permissions already granted! Starting BLE Service…")
                     com.aifd.service.BleForegroundService.start(ctx)
-                    
-                    try {
-                        val btManager = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
-                        if (btManager?.adapter?.isEnabled == false) {
-                            @Suppress("DEPRECATION")
-                            enableBtLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
-                        }
-                    } catch (e: Exception) {
-                        Log.e("MainActivity", "Failed to launch BT enable intent: ${e.message}")
-                    }
                 } else {
                     permissionLauncher.launch(permissions.toTypedArray())
                 }

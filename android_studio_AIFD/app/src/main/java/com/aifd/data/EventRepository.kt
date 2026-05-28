@@ -27,20 +27,29 @@ object EventRepository {
     private const val KEY_EVENTS  = "events"
     private const val MAX_EVENTS  = 200
 
+    private const val KEY_LAST_CLEARED = "last_cleared_ms"
+
     private var prefs: SharedPreferences? = null
     private val gson = Gson()
 
     private val _events = MutableStateFlow<List<FallEvent>>(emptyList())
     val events: StateFlow<List<FallEvent>> = _events.asStateFlow()
 
+    private var _lastClearedMs: Long = 0
+    val lastClearedMs: Long get() = _lastClearedMs
+
     fun init(context: Context) {
         if (prefs != null) return
         prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        _lastClearedMs = prefs?.getLong(KEY_LAST_CLEARED, 0L) ?: 0L
         _events.value = load()
         Log.d(TAG, "Loaded ${_events.value.size} events from storage")
     }
 
     fun addEvent(event: FallEvent) {
+        if (event.timestamp.time <= _lastClearedMs) {
+            return // Bỏ qua nếu thông báo cũ hơn thời điểm đã xóa
+        }
         val updated = (listOf(event) + _events.value)
             .distinctBy { it.id }
             .sortedByDescending { it.timestamp }
@@ -50,10 +59,22 @@ object EventRepository {
         Log.d(TAG, "addEvent [${event.type}] '${event.title}' total=${updated.size}")
     }
 
+    fun updateEvent(event: FallEvent) {
+        val updated = _events.value.map { if (it.id == event.id) event else it }
+            .sortedByDescending { it.timestamp }
+        _events.value = updated
+        save(updated)
+        Log.d(TAG, "updateEvent [${event.type}] '${event.title}'")
+    }
+
     fun clearAll() {
+        _lastClearedMs = System.currentTimeMillis()
         _events.value = emptyList()
-        prefs?.edit { remove(KEY_EVENTS) }
-        Log.d(TAG, "All events cleared")
+        prefs?.edit {
+            remove(KEY_EVENTS)
+            putLong(KEY_LAST_CLEARED, _lastClearedMs)
+        }
+        Log.d(TAG, "All events cleared. lastClearedMs=$_lastClearedMs")
     }
 
     // ── Serialization ──────────────────────────────────────────────────────────

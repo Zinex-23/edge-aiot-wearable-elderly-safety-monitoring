@@ -45,7 +45,9 @@ data class MonitoringUiState(
     val isConnected: Boolean = false,
     val bmiSnapshot: BleManager.BmiSnapshot? = null,
     val cloudLoadState: CloudLoadState = CloudLoadState.IDLE,
-    val cloudError: String = ""
+    val cloudError: String = "",
+    val hr1hStats: Triple<Int, Int, Int> = Triple(0, 0, 0),
+    val spo21hStats: Triple<Int, Int, Int> = Triple(0, 0, 0)
 )
 
 class MonitoringViewModel(application: Application) : AndroidViewModel(application) {
@@ -190,6 +192,12 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
             TimeRange.ONE_HOUR          -> fetchCloudVitals("1h")
             TimeRange.TWENTY_FOUR_HOURS -> fetchCloudVitals("24h")
             else -> {}
+        }
+    }
+
+    fun fetch1hDataIfNeeded() {
+        if (isStale(lastFetch1hMs, REFRESH_1H_MS)) {
+            fetchCloudVitals("1h")
         }
     }
 
@@ -422,6 +430,7 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
                     detail = detail
                 )
             )
+            uploadFallEventToCloud(EventType.VITALS.name, null, now)
             lastVitalsEventMs = now
         }
 
@@ -438,6 +447,7 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
                     detail = "SpO2: $spo2% (ngưỡng < 95%)"
                 )
             )
+            uploadFallEventToCloud(EventType.VITALS.name, null, now + 1)
             lastVitalsEventMs = now
         }
 
@@ -468,7 +478,7 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
             while (true) {
                 delay(60_000L) // check every minute; actual fetch respects intervals
                 val state = _uiState.value
-                if (state.timeRange == TimeRange.ONE_HOUR && isStale(lastFetch1hMs, REFRESH_1H_MS)) {
+                if (isStale(lastFetch1hMs, REFRESH_1H_MS)) {
                     fetchCloudVitals("1h")
                 }
                 if (state.timeRange == TimeRange.TWENTY_FOUR_HOURS && isStale(lastFetch24hMs, REFRESH_24H_MS)) {
@@ -482,7 +492,7 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
         if (currentUserId.isBlank() || currentUserId == "000") return
         if (!isNetworkAvailable()) {
             // Offline: use cache already loaded from prefs
-            _uiState.update { it.copy(cloudLoadState = CloudLoadState.IDLE) }
+            _uiState.update { it.copy(cloudLoadState = CloudLoadState.ERROR, cloudError = "No network") }
             refreshChart()
             return
         }
@@ -532,9 +542,21 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
                     putString(KEY_CLOUD_24H_SPO2, spo2List.joinToString(","))
                 }
             }
-            _uiState.update { it.copy(cloudLoadState = CloudLoadState.SUCCESS) }
+            _uiState.update { 
+                it.copy(
+                    cloudLoadState = CloudLoadState.SUCCESS,
+                    hr1hStats = computeStats(cloud1hHr),
+                    spo21hStats = computeStats(cloud1hSpo2)
+                ) 
+            }
             refreshChart()
         }
+    }
+
+    private fun computeStats(list: List<Int>): Triple<Int, Int, Int> {
+        val valid = list.filter { it > 0 }
+        if (valid.isEmpty()) return Triple(0, 0, 0)
+        return Triple(valid.average().toInt(), valid.minOrNull() ?: 0, valid.maxOrNull() ?: 0)
     }
 
     /**
@@ -593,6 +615,13 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
         cloud1hSpo2  = parseIntList(prefs.getString(KEY_CLOUD_1H_SPO2, null))
         cloud24hHr   = parseIntList(prefs.getString(KEY_CLOUD_24H_HR,  null))
         cloud24hSpo2 = parseIntList(prefs.getString(KEY_CLOUD_24H_SPO2, null))
+        
+        _uiState.update {
+            it.copy(
+                hr1hStats = computeStats(cloud1hHr),
+                spo21hStats = computeStats(cloud1hSpo2)
+            )
+        }
     }
 
     private fun parseIntList(s: String?): List<Int> {

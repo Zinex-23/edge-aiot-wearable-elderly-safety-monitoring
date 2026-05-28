@@ -156,9 +156,11 @@ fun AppNavigation(
     val alertViewModel: AlertViewModel = viewModel(factory = factory)
 
     // Reset ViewModel state when the logged-in user changes (e.g. switching accounts)
-    LaunchedEffect(username) {
+    LaunchedEffect(username, selectedRole) {
         homeViewModel.resetForUser(username)
         monitoringViewModel.resetForUser(username)
+        alertViewModel.currentUserId = username
+        alertViewModel.currentUserRole = selectedRole
     }
 
     // Sync device connection state from DeviceViewModel -> HomeViewModel
@@ -277,7 +279,10 @@ fun AppNavigation(
         ) {
             composable(Screen.Home.route) {
                 val alertUiState by alertViewModel.uiState.collectAsState()
-                val navigateToMonitoring = {
+                val navigateToMonitoring: (MetricTab?) -> Unit = { tab ->
+                    if (tab != null) {
+                        monitoringViewModel.selectTab(tab)
+                    }
                     navController.navigate(Screen.Monitoring.route) {
                         popUpTo(Screen.Home.route) { inclusive = false }
                         launchSingleTop = true
@@ -285,6 +290,7 @@ fun AppNavigation(
                 }
                 HomeScreen(
                     homeViewModel = homeViewModel,
+                    monitoringViewModel = monitoringViewModel,
                     role = selectedRole,
                     userName = if (selectedRole == UserRole.WEARER) userProfile.wearerName else userProfile.caregiverName,
                     alertCount = alertUiState.fallEvents.count { it.status == EventStatus.PENDING },
@@ -316,6 +322,9 @@ fun AppNavigation(
             }
 
             composable(Screen.Alerts.route) {
+                LaunchedEffect(Unit) {
+                    alertViewModel.fetchCloudEventsNow()
+                }
                 val alertState by alertViewModel.uiState.collectAsState()
                 HistoryScreen(
                     events = alertState.fallEvents,

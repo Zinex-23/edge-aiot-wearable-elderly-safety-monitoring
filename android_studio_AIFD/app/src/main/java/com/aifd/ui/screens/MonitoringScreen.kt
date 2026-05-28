@@ -134,89 +134,7 @@ private fun MonitoringScreenContent(
     }
 }
 
-// ── Cloud loading animation ───────────────────────────────────────────────────
 
-@Composable
-private fun CloudLoadingCard() {
-    val infiniteTransition = rememberInfiniteTransition(label = "cloud_load")
-
-    // Rotating sync icon
-    val angle by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue  = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 900, easing = LinearEasing)
-        ),
-        label = "rotate"
-    )
-
-    // Shimmer bar position (0 → 1 → 0)
-    val shimmerPos by infiniteTransition.animateFloat(
-        initialValue = -0.4f,
-        targetValue  = 1.4f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1200, easing = FastOutSlowInEasing)
-        ),
-        label = "shimmer"
-    )
-
-    val primaryColor = MaterialTheme.colorScheme.primary
-    val trackColor   = MaterialTheme.colorScheme.surfaceVariant
-
-    ElevatedCard(
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 18.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Icon(
-                imageVector = Icons.Default.Sync,
-                contentDescription = null,
-                modifier = Modifier.size(22.dp).rotate(angle),
-                tint = primaryColor
-            )
-            Column {
-                Text(
-                    text = "Đang tải dữ liệu từ Cloud…",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium
-                )
-                Text(
-                    text = "Vui lòng chờ trong giây lát",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-
-        // Custom shimmer bar — avoids LinearProgressIndicator BOM incompatibility
-        Canvas(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(4.dp)
-        ) {
-            // Track
-            drawRect(color = trackColor, size = size)
-            // Shimmer stripe
-            val stripeWidth = size.width * 0.35f
-            val x = shimmerPos * size.width - stripeWidth / 2
-            drawRect(
-                color = primaryColor,
-                topLeft = Offset(x.coerceIn(0f, size.width), 0f),
-                size = Size(
-                    width  = (stripeWidth - (x - (size.width - stripeWidth)).coerceAtLeast(0f))
-                        .coerceIn(0f, stripeWidth),
-                    height = size.height
-                )
-            )
-        }
-    }
-}
 
 @Composable
 private fun TimeRangeSelector(
@@ -378,10 +296,7 @@ private fun HeartRateContent(
         showLive  = !isCaregiver
     )
 
-    // Cloud loading indicator (only for history tabs)
-    if (uiState.timeRange != TimeRange.LIVE && uiState.cloudLoadState == CloudLoadState.LOADING) {
-        CloudLoadingCard()
-    }
+
 
     // Current value — chỉ hiện ở Live mode (caregiver không vào được Live nên ẩn luôn)
     if (!isCaregiver || uiState.timeRange == TimeRange.LIVE) {
@@ -424,6 +339,7 @@ private fun HeartRateContent(
         AifdChartCard(
             title     = strings.heartRateTrend,
             trailing  = if (uiState.timeRange == TimeRange.ONE_HOUR) "1h" else "24h",
+            isLoading = uiState.cloudLoadState == CloudLoadState.LOADING,
             onRefresh = onRefreshCloud
         ) {
             if (hasChartData) {
@@ -575,10 +491,7 @@ private fun SpO2Content(
         showLive   = !isCaregiver
     )
 
-    // Cloud loading indicator (only for history tabs)
-    if (uiState.timeRange != TimeRange.LIVE && uiState.cloudLoadState == CloudLoadState.LOADING) {
-        CloudLoadingCard()
-    }
+
 
     // Current value — chỉ hiện ở Live mode
     if (!isCaregiver || uiState.timeRange == TimeRange.LIVE) {
@@ -619,6 +532,7 @@ private fun SpO2Content(
         AifdChartCard(
             title     = strings.spo2Trend,
             trailing  = if (uiState.timeRange == TimeRange.ONE_HOUR) "1h" else "24h",
+            isLoading = uiState.cloudLoadState == CloudLoadState.LOADING,
             onRefresh = onRefreshCloud
         ) {
             if (hasChartData) {

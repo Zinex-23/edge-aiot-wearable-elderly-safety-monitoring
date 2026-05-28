@@ -223,6 +223,19 @@ object CloudApi {
         }
     }
 
+    fun getFallEvents(userId: String, deviceId: String = ""): List<CloudFallEvent> {
+        return try {
+            val url = "$RENDER_URL/api/fall_events?userId=${userId}&deviceId=${deviceId}&limit=50"
+            val resp = get(url)
+            val obj = gson.fromJson(resp, JsonObject::class.java)
+            if (!obj.get("ok").asBoolean) return emptyList()
+            val type = object : TypeToken<List<CloudFallEvent>>() {}.type
+            gson.fromJson(obj.get("items"), type) ?: emptyList()
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
     // ── Health Check ──────────────────────────────────────────────────────────
 
     fun isServerReachable(): Boolean {

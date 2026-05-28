@@ -36,6 +36,11 @@ class AlertViewModel(application: Application) : AndroidViewModel(application) {
     private var bleService: BleForegroundService? = null
     private var connectedDeviceName = "AIFD Wearable"
 
+    var currentUserId = ""
+    var currentUserRole: UserRole? = null
+
+    private var cloudRefreshJob: kotlinx.coroutines.Job? = null
+
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             val binder = service as BleForegroundService.LocalBinder
@@ -57,6 +62,8 @@ class AlertViewModel(application: Application) : AndroidViewModel(application) {
         }
         val intent = Intent(application, BleForegroundService::class.java)
         application.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+        
+        startCloudRefreshLoop()
     }
 
     private fun observeServiceState() {
@@ -152,8 +159,71 @@ class AlertViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(notificationSettings = settings) }
     }
 
+    fun fetchCloudEventsNow() {
+        if (currentUserId.isBlank() || currentUserId == "000") return
+        if (currentUserRole != UserRole.CAREGIVER) return
+
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val cloudEvents = CloudApi.getFallEvents(currentUserId)
+            if (cloudEvents.isNotEmpty()) {
+                val isoFmt = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US).apply {
+                    timeZone = java.util.TimeZone.getTimeZone("UTC")
+                }
+                cloudEvents.forEach { cEvent ->
+                    val parsedDate = try {
+                        isoFmt.parse(cEvent.timestamp) ?: Date()
+                    } catch (e: Exception) {
+                        Date()
+                    }
+                    // Bỏ qua nếu thông báo cũ hơn thời điểm đã xóa
+                    if (parsedDate.time <= EventRepository.lastClearedMs) {
+                        return@forEach
+                    }
+
+                    val eventType = try {
+                        EventType.valueOf(cEvent.type)
+                    } catch (e: Exception) {
+                        EventType.FALL
+                    }
+                    val status = if (cEvent.resolved) EventStatus.RESOLVED else EventStatus.PENDING
+                    val fallEvent = FallEvent(
+                        id = cEvent.id, // Using server ID
+                        timestamp = parsedDate,
+                        type = eventType,
+                        title = if (eventType == EventType.VITALS) "Cảnh báo sinh hiệu" else "Phát hiện té ngã",
+                        status = status,
+                        deviceName = cEvent.deviceId,
+                        detail = if (cEvent.fallProb != null) "Xác suất: ${(cEvent.fallProb * 100).toInt()}%" else "Cảnh báo bất thường"
+                    )
+                    // Add to repository
+                    val repoEvents = EventRepository.events.value
+                    if (repoEvents.none { it.id == fallEvent.id }) {
+                        EventRepository.addEvent(fallEvent)
+                    } else {
+                        // If it exists but status changed, we should update it
+                        val existing = repoEvents.find { it.id == fallEvent.id }
+                        if (existing != null && existing.status != fallEvent.status) {
+                            EventRepository.updateEvent(fallEvent)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun startCloudRefreshLoop() {
+        cloudRefreshJob?.cancel()
+        cloudRefreshJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            while (true) {
+                kotlinx.coroutines.delay(5_000L) // Poll every 5 seconds
+                fetchCloudEventsNow()
+            }
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
+        cloudRefreshJob?.cancel()
         getApplication<Application>().unbindService(serviceConnection)
     }
 }
