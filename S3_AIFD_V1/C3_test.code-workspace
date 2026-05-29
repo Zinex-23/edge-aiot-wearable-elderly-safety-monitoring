@@ -1,0 +1,29 @@
+{
+	"folders": [
+		{
+			"name": "C3_test",
+			"path": "../C3_test"
+		},
+		{
+			"name": "S3_project",
+			"path": "../S3_project"
+		},
+		{
+			"name": "S3_Fix-Build",
+			"path": "../S3_Fix-Build"
+		},
+		{
+			"name": "S3_prj_Mar27",
+			"path": "../S3_prj_Mar27"
+		},
+		{
+			"name": "esp32-S3-build",
+			"path": "../esp32-S3-build"
+		},
+		{
+			"name": "S3_BLE",
+			"path": "."
+		}
+	],
+	"settings": {}
+}
