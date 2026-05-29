@@ -982,9 +982,9 @@ void setup() {
     delay(300);
     Serial.println();
     Serial.println("=======================================================");
-    Serial.println("ESP32-S3  AIFD  S3_BLE_test_2  [integration test]");
+    Serial.println("ESP32-S3  AIFD  S3_BLE_test_3(fullsensor)  [real HR/SpO2]");
     Serial.println("  Fall: real BMI160 + TFLite V84");
-    Serial.println("  Vitals: simulated HR/SpO2 every 25s");
+    Serial.println("  Vitals: real MAX30102 HR/SpO2 every 25s");
     Serial.println("  Button: SAFE during alarm, cycle LED otherwise");
     Serial.println("=======================================================");
 
