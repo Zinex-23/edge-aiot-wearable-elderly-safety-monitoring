@@ -165,7 +165,49 @@ class BleManager(private val context: Context) {
         }
     }
 
+    // The single device the user explicitly chose. Once set, ALL connection attempts
+    // (manual + background auto-reconnect) target THIS address only — never a different
+    // bonded device. Cleared on disconnect().
+    @Volatile private var targetAddress: String? = null
+
+    // Guard against multiple simultaneous GATT connection attempts.
+    // BleForegroundService + multiple ViewModels all call autoConnectBondedEsp32() on startup;
+    // without this flag, 3 connect() calls arrive at ESP32 within milliseconds → all rejected
+    // and the extra GATT clients leak, wedging the Bluetooth stack into permanent error 133.
+    @Volatile private var isConnecting = false
+
+    // While the user is actively scanning (pairing screen), background auto-reconnect must
+    // stand down. An in-flight direct connectGatt() holds the LE initiator and starves the
+    // scanner on Samsung — the device is then never discovered ("can't find device").
+    @Volatile private var scanning = false
+
+    // Connection watchdog: a connectGatt() that never reaches STATE_CONNECTED also never
+    // fires onConnectionStateChange (e.g. link-layer timeout, BT toggled, stack wedged).
+    // Without this, isConnecting would stay true forever and block every future attempt.
+    private val CONNECT_TIMEOUT_MS = 12_000L
+    private val connectTimeoutRunnable = Runnable {
+        if (_bleState.value !is BleState.Connected && isConnecting) {
+            Log.w(TAG, "Connect watchdog fired — no callback in ${CONNECT_TIMEOUT_MS / 1000}s, forcing teardown")
+            forceCloseGatt()
+            isConnecting = false
+            _bleState.value = BleState.Disconnected
+            retryConnectionAfterDelay()
+        }
+    }
+
     fun isBluetoothEnabled(): Boolean = bluetoothAdapter?.isEnabled == true
+
+    /** Closes the active GATT client cleanly so no half-open client leaks into the BT stack. */
+    @SuppressLint("MissingPermission")
+    private fun forceCloseGatt() {
+        try {
+            bluetoothGatt?.disconnect()
+            bluetoothGatt?.close()
+        } catch (e: Exception) {
+            Log.w(TAG, "forceCloseGatt: ${e.message}")
+        }
+        bluetoothGatt = null
+    }
 
     // =====================================================================
     // 1. AUTO-CONNECT: Find bonded ESP32 and connect GATT automatically
@@ -184,27 +226,44 @@ class BleManager(private val context: Context) {
             Log.d(TAG, "autoConnectBondedEsp32 skipped — already connected")
             return true
         }
-        val bonded = bluetoothAdapter?.bondedDevices ?: return false
-        val savedMac = context.getSharedPreferences("aifd_prefs", Context.MODE_PRIVATE)
+        if (isConnecting) {
+            Log.d(TAG, "autoConnectBondedEsp32 skipped — already connecting")
+            return true
+        }
+        if (scanning) {
+            Log.d(TAG, "autoConnectBondedEsp32 skipped — user is scanning (scanner has radio priority)")
+            return false
+        }
+        // The user-chosen address always wins. Fall back to the persisted MAC, then a name match.
+        val savedMac = targetAddress ?: context.getSharedPreferences("aifd_prefs", Context.MODE_PRIVATE)
             .getString("device_mac", null)
 
-        // Strategy 1: match by name — "ESP32..." or "S3..." (covers both main firmware and test board)
-        var esp32 = bonded.firstOrNull { device ->
+        // Priority 1: the exact device the user selected / last connected to.
+        if (savedMac != null) {
+            try {
+                val device = bluetoothAdapter?.getRemoteDevice(savedMac)
+                if (device != null) {
+                    Log.i(TAG, "Auto-connecting to target ${device.address}…")
+                    connectGatt(device)
+                    return true
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "getRemoteDevice($savedMac) failed: ${e.message}")
+            }
+        }
+
+        // Priority 2: no target yet — match the first bonded ESP32/S3 by name.
+        val bonded = bluetoothAdapter?.bondedDevices ?: return false
+        val esp32 = bonded.firstOrNull { device ->
             val n = device.name ?: return@firstOrNull false
             n.startsWith("ESP32", ignoreCase = true) || n.startsWith("S3", ignoreCase = true)
         }
-        // Strategy 2: match by stored MAC address (works when device.name returns null)
-        if (esp32 == null && savedMac != null) {
-            esp32 = bonded.firstOrNull { it.address.equals(savedMac, ignoreCase = true) }
-            if (esp32 != null) Log.i(TAG, "Found device by stored MAC $savedMac (name was null)")
-        }
-
         if (esp32 != null) {
-            Log.i(TAG, "Auto-connecting to ${esp32.name ?: "ESP32"} (${esp32.address})…")
+            Log.i(TAG, "Auto-connecting to bonded ${esp32.name} (${esp32.address})…")
             connectGatt(esp32)
             return true
         }
-        Log.i(TAG, "No bonded ESP32 found in ${bonded.size} bonded devices (savedMac=$savedMac)")
+        Log.i(TAG, "No target and no bonded ESP32 found in ${bonded.size} bonded devices")
         return false
     }
 
@@ -233,8 +292,18 @@ class BleManager(private val context: Context) {
         try { bluetoothLeScanner?.stopScan(leScanCallback) } catch (_: Exception) {}
 
         if (_bleState.value is BleState.Scanning) return
-        
+
         Log.i(TAG, "startScan() called")
+
+        // Scanner gets radio priority: cancel any pending/in-flight background connect so the
+        // LE initiator doesn't starve discovery (root cause of "device not found" on Samsung).
+        scanning = true
+        handler.removeCallbacks(reconnectRunnable)
+        handler.removeCallbacks(connectTimeoutRunnable)
+        if (isConnecting) {
+            isConnecting = false
+            forceCloseGatt()
+        }
 
         if (!isLocationEnabled()) {
             Log.e(TAG, "Location is OFF. Scanning will be blocked by system!")
@@ -311,6 +380,7 @@ class BleManager(private val context: Context) {
     @SuppressLint("MissingPermission")
     fun stopScan() {
         Log.i(TAG, "stopScan() called")
+        scanning = false
         try { bluetoothLeScanner?.stopScan(leScanCallback) } catch (_: Exception) {}
         if (_bleState.value is BleState.Scanning) _bleState.value = BleState.Idle
     }
@@ -351,9 +421,33 @@ class BleManager(private val context: Context) {
     // 3. GATT CONNECTION
     // =====================================================================
 
+    /**
+     * Explicit user request to connect to ONE specific device (tapped in the list).
+     * This becomes the single connection target: every pending attempt to any other
+     * device is torn down first, and all future auto-reconnects target this address only.
+     */
     @SuppressLint("MissingPermission")
     fun connect(address: String) {
+        if (_bleState.value is BleState.Connected
+            && (_bleState.value as BleState.Connected).deviceAddress.equals(address, ignoreCase = true)
+        ) return
+
+        Log.i(TAG, "connect($address): user-selected — tearing down everything else")
+
+        // 1. This device is now the only target.
+        targetAddress = address
+        context.getSharedPreferences("aifd_prefs", Context.MODE_PRIVATE)
+            .edit { putString("device_mac", address) }
+
+        // 2. Cancel every pending retry/watchdog and fully close any existing/leaked client.
+        handler.removeCallbacks(reconnectRunnable)
+        handler.removeCallbacks(connectTimeoutRunnable)
+        reconnectAttempts = 0
+        isConnecting = false
         stopScan()
+        forceCloseGatt()
+
+        // 3. Connect fresh to exactly the tapped device.
         try {
             val device = bluetoothAdapter?.getRemoteDevice(address) ?: run {
                 _bleState.value = BleState.Error("Device not found")
@@ -368,14 +462,16 @@ class BleManager(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     private fun connectGatt(device: BluetoothDevice) {
+        isConnecting = true
+        // Arm the watchdog: if no STATE_CONNECTED/DISCONNECTED callback arrives in time, self-heal.
+        handler.removeCallbacks(connectTimeoutRunnable)
+        handler.postDelayed(connectTimeoutRunnable, CONNECT_TIMEOUT_MS)
         try {
-            // Reset state before connecting
+            // Reset state before connecting — always start from a clean, single GATT client.
             handler.post {
                 _bleState.value = BleState.Idle
-                bluetoothGatt?.disconnect()
-                bluetoothGatt?.close()
-                bluetoothGatt = null
-                
+                forceCloseGatt()
+
                 handler.postDelayed({
                     bluetoothGatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                         device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
@@ -397,9 +493,13 @@ class BleManager(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     fun disconnect() {
-        bluetoothGatt?.disconnect()
-        bluetoothGatt?.close()
-        bluetoothGatt = null
+        // User-initiated disconnect: stop all retries and forget the target.
+        targetAddress = null
+        isConnecting = false
+        reconnectAttempts = 0
+        handler.removeCallbacks(reconnectRunnable)
+        handler.removeCallbacks(connectTimeoutRunnable)
+        forceCloseGatt()
         _bleState.value = BleState.Disconnected
         _nearbyDevices.value = emptyList()
     }
@@ -432,7 +532,17 @@ class BleManager(private val context: Context) {
 
     private fun resetReconnectBackoff() {
         reconnectAttempts = 0
+        isConnecting = false
         handler.removeCallbacks(reconnectRunnable)
+        handler.removeCallbacks(connectTimeoutRunnable)
+    }
+
+    /** Called by BleForegroundService when Bluetooth is turned off or back on. */
+    fun resetConnectingState() {
+        isConnecting = false
+        forceCloseGatt()
+        handler.removeCallbacks(reconnectRunnable)
+        handler.removeCallbacks(connectTimeoutRunnable)
     }
 
     @SuppressLint("MissingPermission")
@@ -440,9 +550,12 @@ class BleManager(private val context: Context) {
 
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             Log.i(TAG, "onConnectionStateChange status=$status newState=$newState device=${gatt.device.address}")
+            // A real callback arrived — the watchdog is no longer needed.
+            handler.removeCallbacks(connectTimeoutRunnable)
             handler.post {
                 when (newState) {
                     BluetoothProfile.STATE_CONNECTED -> {
+                        isConnecting = false
                         if (status == BluetoothGatt.GATT_SUCCESS) {
                             // Clear Android GATT cache so fresh service discovery finds new
                             // characteristics added after the last bonding (e.g. new VITALS char)
@@ -464,17 +577,29 @@ class BleManager(private val context: Context) {
                         }
                     }
                     BluetoothProfile.STATE_DISCONNECTED -> {
+                        isConnecting = false
+                        // Always fully close the client so it never leaks into the BT stack
+                        // (leaked clients are the #1 cause of permanent GATT error 133).
                         if (status == 133) {
-                            // GATT_ERROR 133: driver may be wedged — must fully teardown before retry
                             Log.w(TAG, "GATT Error 133 — full teardown before retry")
-                            bluetoothGatt = null
-                            gatt.disconnect()
-                            gatt.close()
+                            // If the ESP32 was reflashed without bonding, the old bond keys will cause
+                            // immediate connection rejection (Error 133). We must unpair it to recover.
+                            try {
+                                val currentDevice = gatt.device
+                                if (currentDevice != null && currentDevice.bondState != BluetoothDevice.BOND_NONE) {
+                                    val m = currentDevice.javaClass.getMethod("removeBond")
+                                    val result = m.invoke(currentDevice) as? Boolean ?: false
+                                    Log.i(TAG, "Unpaired device to clear broken bond state (result: $result)")
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to remove bond: ${e.message}")
+                            }
                         } else {
                             Log.i(TAG, "GATT disconnected (status=$status)")
-                            bluetoothGatt = null
-                            gatt.close()
                         }
+                        try { gatt.disconnect() } catch (_: Exception) {}
+                        try { gatt.close() } catch (_: Exception) {}
+                        bluetoothGatt = null
                         _bleState.value = BleState.Disconnected
                         retryConnectionAfterDelay()
                     }
@@ -527,9 +652,17 @@ class BleManager(private val context: Context) {
 
         @SuppressLint("MissingPermission")
         private fun queueNotification(gatt: BluetoothGatt, service: BluetoothGattService, charUuid: UUID) {
-            val characteristic = service.getCharacteristic(charUuid) ?: return
+            val characteristic = service.getCharacteristic(charUuid)
+            if (characteristic == null) {
+                Log.e(TAG, "Characteristic not found: $charUuid")
+                return
+            }
             gatt.setCharacteristicNotification(characteristic, true)
-            val descriptor = characteristic.getDescriptor(CCCD_UUID) ?: return
+            val descriptor = characteristic.getDescriptor(CCCD_UUID)
+            if (descriptor == null) {
+                Log.e(TAG, "CCCD Descriptor not found for characteristic: $charUuid")
+                return
+            }
             descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
             descriptorWriteQueue.add(descriptor)
         }
@@ -539,31 +672,57 @@ class BleManager(private val context: Context) {
             if (descriptorWriteQueue.isEmpty()) {
                 isWritingDescriptor = false
                 Log.i(TAG, "All notifications subscribed ✓")
-                sendReadyCommand()
+                handler.postDelayed({ sendReadyCommand() }, 100) // Small delay to let Android stack breathe
                 return
             }
             isWritingDescriptor = true
             val descriptor = descriptorWriteQueue.poll()
             if (descriptor != null) {
-                gatt.writeDescriptor(descriptor)
+                val success = gatt.writeDescriptor(descriptor)
+                if (!success) {
+                    Log.e(TAG, "writeDescriptor failed to initiate for ${descriptor.characteristic.uuid}! Retrying...")
+                    descriptorWriteQueue.addFirst(descriptor)
+                    handler.postDelayed({ writeNextDescriptor(gatt) }, 50)
+                }
             }
         }
 
         @SuppressLint("MissingPermission")
         fun sendReadyCommand() {
             val gatt = bluetoothGatt ?: return
-            val service = gatt.getService(SERVICE_UUID) ?: return
-            val controlChar = service.getCharacteristic(CONTROL_CHAR_UUID) ?: return
+            val service = gatt.getService(SERVICE_UUID)
+            if (service == null) {
+                Log.e(TAG, "Service not found in sendReadyCommand")
+                return
+            }
+            val controlChar = service.getCharacteristic(CONTROL_CHAR_UUID)
+            if (controlChar == null) {
+                Log.e(TAG, "Control characteristic not found in sendReadyCommand")
+                return
+            }
             
             controlChar.value = "READY".toByteArray(Charsets.UTF_8)
-            gatt.writeCharacteristic(controlChar)
-            Log.i(TAG, "Sent READY command to ESP32")
+            val success = gatt.writeCharacteristic(controlChar)
+            Log.i(TAG, "Initiated READY command to ESP32: success=$success")
         }
 
         @SuppressLint("MissingPermission")
         override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
             Log.d(TAG, "Descriptor written for ${descriptor.characteristic.uuid}, status=$status")
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                Log.e(TAG, "Descriptor write failed with status $status! Retrying...")
+                descriptorWriteQueue.addFirst(descriptor)
+                handler.postDelayed({ writeNextDescriptor(gatt) }, 50)
+                return
+            }
             writeNextDescriptor(gatt)
+        }
+
+        override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+            super.onCharacteristicWrite(gatt, characteristic, status)
+            if (characteristic.uuid == CONTROL_CHAR_UUID) {
+                Log.i(TAG, "READY command write callback received, status=$status")
+            }
         }
 
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
@@ -707,7 +866,7 @@ class BleManager(private val context: Context) {
             mediaPlayer?.release()
             mediaPlayer = null
             
-            val resId = context.resources.getIdentifier("no_sound", "raw", context.packageName)
+            val resId = context.resources.getIdentifier("event_sos", "raw", context.packageName)
             if (resId != 0) {
                 mediaPlayer = MediaPlayer()
                 
@@ -734,9 +893,9 @@ class BleManager(private val context: Context) {
                     mediaPlayer = null
                 }
                 mediaPlayer?.start()
-                Log.i(TAG, "Playing emergency alert: no_sound at TRIPLE-MAX volume")
+                Log.i(TAG, "Playing emergency alert: event_sos at TRIPLE-MAX volume")
             } else {
-                Log.e(TAG, "!!! CRITICAL: Sound file 'no_sound' NOT FOUND in res/raw !!!")
+                Log.e(TAG, "!!! CRITICAL: Sound file 'event_sos' NOT FOUND in res/raw !!!")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error playing alert sound: ${e.message}")

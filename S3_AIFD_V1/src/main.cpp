@@ -31,22 +31,24 @@
 #include "tensorflow/lite/schema/schema_generated.h"
 
 #include <NimBLEDevice.h>
+#include <Adafruit_NeoPixel.h>
 #include <string>
 
 // =====================================================================
 // PIN CONFIG
 // =====================================================================
-static const int PIN_LED_GREEN  = 4;
-static const int PIN_LED_YELLOW = 5;
-static const int PIN_LED_RED    = 6;
-static const int PIN_BUZZER     = 7;
+static const int PIN_LED_VCC = 4;   // RGB module power (GPIO-driven)
+static const int PIN_LED_DI  = 5;   // WS2812 data in
+//                         6        // DO — unused (data out to next LED)
+static const int PIN_BUZZER  = 7;
 static const int PIN_BUTTON     = 10;
 static const int PIN_I2C_SDA   = 8;
 static const int PIN_I2C_SCL   = 9;
 
 static const unsigned int  BUZZER_FREQ_HZ    = 2300;
 static const unsigned long DEBOUNCE_MS       = 30;
-static const unsigned long BLINK_INTERVAL_MS = 300;
+static const unsigned long BLINK_SLOW_MS     = 500;
+static const unsigned long BLINK_FAST_MS     = 250;
 
 // =====================================================================
 // BMI160 REGISTERS
@@ -114,19 +116,23 @@ static NimBLECharacteristic* gCharAlert    = nullptr;
 static NimBLECharacteristic* gCharVitals   = nullptr;
 static bool                  gBleConnected = false;
 static bool                  gBleReady     = false;
-static uint32_t              gConnectCount = 0;
+static uint32_t              gConnectCount        = 0;
+static volatile bool         gBleJustConnected    = false;
+static volatile bool         gBleJustDisconnected = false;
 
 class BleServerCb : public NimBLEServerCallbacks {
     void onConnect(NimBLEServer *s) override {
         (void)s;
-        gBleConnected = true;
-        gBleReady     = false;
+        gBleConnected        = true;
+        gBleReady            = false;
         gConnectCount++;
+        gBleJustConnected    = true;
         Serial.println("[BLE] *** Client connected — waiting for READY ***");
     }
     void onDisconnect(NimBLEServer *s) override {
-        gBleConnected = false;
-        gBleReady     = false;
+        gBleConnected        = false;
+        gBleReady            = false;
+        gBleJustDisconnected = true;
         s->startAdvertising();
         Serial.println("[BLE] Client disconnected — re-advertising");
     }
@@ -161,24 +167,24 @@ class ControlCb : public NimBLECharacteristicCallbacks {
 };
 
 // =====================================================================
-// LED STATE MACHINE — pipeline-reactive, no manual cycling
+// LED STATE MACHINE
 // =====================================================================
 enum LedState : uint8_t {
-    LED_IDLE = 0,      // all OFF  — no movement
-    LED_MOVING,        // all ON   — activity detected (1–2 consecutive windows)
-    LED_ACTIVE,        // GREEN    — activity gate met (3 windows), ready to analyse
-    LED_CANDIDATE,     // G+Y      — candidate peak detected, AI can run
-    LED_AI_FALL,       // G+Y+R    — AI says fall this window
-    LED_BLINK_WATCH,   // 3 BLINK  — FALL_WATCH / STILL_TIMING (checking stillness)
-    LED_ALARM          // 3 BLINK + BUZZER — confirmed fall
+    LED_BOOT = 0,      // blue blink slow — device initialising
+    LED_ADVERTISING,   // yellow blink slow — BLE not connected
+    LED_CONNECTED,     // green solid — BLE active
+    LED_WARNING,       // yellow blink fast — BLE drop / sensor error
+    LED_FALL_WATCH,    // red blink slow — fall candidate, checking stillness
+    LED_ALARM          // red blink fast + buzzer — fall confirmed
 };
 static const char *LED_STATE_NAMES[] = {
-    "IDLE","MOVING","ACTIVE","CANDIDATE","AI_FALL","BLINK_WATCH","ALARM"
+    "BOOT","ADVERTISING","CONNECTED","WARNING","FALL_WATCH","ALARM"
 };
 
-static volatile LedState gLedState   = LED_IDLE;
-static bool              blinkLevel  = true;
-static unsigned long     blinkLastMs = 0;
+static volatile LedState gLedState     = LED_BOOT;
+static bool              blinkLevel    = true;
+static unsigned long     blinkLastMs   = 0;
+static uint32_t          gWarnExpireMs = 0; // 0 = permanent WARNING; >0 = auto-return at this ms
 
 // Button debounce
 static int           btnLastReading = HIGH;
@@ -245,29 +251,34 @@ static volatile float    gLastPeakGyro = 0.0f;   // dps
 static volatile bool     gLastActive   = false;  // true if peak crossed activity threshold
 
 // =====================================================================
-// LED / BUZZER HELPERS
+// RGB LED (WS2812) + BUZZER HELPERS
+// setBrightness(50) ≈ 20 % — keeps current within GPIO 12 mA drive limit
 // =====================================================================
-static void setLeds(bool g, bool y, bool r) {
-    digitalWrite(PIN_LED_GREEN,  g ? HIGH : LOW);
-    digitalWrite(PIN_LED_YELLOW, y ? HIGH : LOW);
-    digitalWrite(PIN_LED_RED,    r ? HIGH : LOW);
+static Adafruit_NeoPixel gLedNeo(1, PIN_LED_DI, NEO_GRB + NEO_KHZ800);
+
+static const uint32_t CLR_BLUE   = 0x0000FFu; // boot
+static const uint32_t CLR_YELLOW = 0xFFA500u; // advertising / warning
+static const uint32_t CLR_GREEN  = 0x00FF00u; // connected
+static const uint32_t CLR_RED    = 0xFF0000u; // fall_watch / alarm
+static const uint32_t CLR_OFF    = 0x000000u;
+
+static void ledSet(uint32_t color) {
+    gLedNeo.setPixelColor(0, color);
+    gLedNeo.show();
 }
 static void buzzerOn()  { tone(PIN_BUZZER, BUZZER_FREQ_HZ); }
 static void buzzerOff() { noTone(PIN_BUZZER); digitalWrite(PIN_BUZZER, LOW); }
 
 static void applyLedState(LedState st) {
+    blinkLevel  = true;
+    blinkLastMs = millis();
     switch (st) {
-        case LED_IDLE:        setLeds(false, false, false); buzzerOff(); break;
-        case LED_MOVING:      setLeds(true,  true,  true);  buzzerOff(); break;
-        case LED_ACTIVE:      setLeds(true,  false, false); buzzerOff(); break;
-        case LED_CANDIDATE:   setLeds(true,  true,  false); buzzerOff(); break;
-        case LED_AI_FALL:     setLeds(true,  true,  true);  buzzerOff(); break;
-        case LED_BLINK_WATCH:
-            blinkLevel = true; blinkLastMs = millis();
-            setLeds(true, true, true); buzzerOff(); break;
-        case LED_ALARM:
-            blinkLevel = true; blinkLastMs = millis();
-            setLeds(true, true, true); buzzerOn();  break;
+        case LED_BOOT:        ledSet(CLR_BLUE);   buzzerOff(); break;
+        case LED_ADVERTISING:
+        case LED_WARNING:     ledSet(CLR_YELLOW); buzzerOff(); break;
+        case LED_CONNECTED:   ledSet(CLR_GREEN);  buzzerOff(); break;
+        case LED_FALL_WATCH:  ledSet(CLR_RED);    buzzerOff(); break;
+        case LED_ALARM:       ledSet(CLR_RED);    buzzerOn();  break;
     }
 }
 
@@ -280,40 +291,31 @@ static void setLedState(LedState next) {
     applyLedState(next);
 }
 
-// Called from loop() — drives blink for both BLINK_WATCH (no buzzer) and ALARM
 static void handleBlink() {
     LedState st = gLedState;
-    if (st != LED_BLINK_WATCH && st != LED_ALARM) return;
+    unsigned long interval;
+    switch (st) {
+        case LED_BOOT:
+        case LED_ADVERTISING:
+        case LED_FALL_WATCH:  interval = BLINK_SLOW_MS; break;
+        case LED_WARNING:
+        case LED_ALARM:       interval = BLINK_FAST_MS; break;
+        default:              return;
+    }
     unsigned long now = millis();
-    if ((unsigned long)(now - blinkLastMs) >= BLINK_INTERVAL_MS) {
-        blinkLastMs = now;
-        blinkLevel  = !blinkLevel;
-        setLeds(blinkLevel, blinkLevel, blinkLevel);
+    if ((unsigned long)(now - blinkLastMs) < interval) return;
+    blinkLastMs = now;
+    blinkLevel  = !blinkLevel;
+    switch (st) {
+        case LED_BOOT:        ledSet(blinkLevel ? CLR_BLUE   : CLR_OFF); break;
+        case LED_ADVERTISING:
+        case LED_WARNING:     ledSet(blinkLevel ? CLR_YELLOW : CLR_OFF); break;
+        case LED_FALL_WATCH:
+        case LED_ALARM:       ledSet(blinkLevel ? CLR_RED    : CLR_OFF); break;
+        default: break;
     }
 }
 
-// Called at end of each inference window — sets LED to match current pipeline stage.
-// gFallAlertActive=true keeps LED_ALARM locked; button press resets it.
-static void updateLedFromPipeline(bool activityActive, int activityCount,
-                                  bool candidateActive, bool isFall) {
-    if (gFallAlertActive) return; // LED_ALARM already set by onFallConfirmed
-
-    LedState next;
-    if (fallDetectState != FDS_IDLE) {         // forward-declared below
-        next = LED_BLINK_WATCH;
-    } else if (isFall) {
-        next = LED_AI_FALL;
-    } else if (candidateActive && activityCount >= ACTIVITY_WINDOW_COUNT) {
-        next = LED_CANDIDATE;
-    } else if (activityCount >= ACTIVITY_WINDOW_COUNT) {
-        next = LED_ACTIVE;
-    } else if (activityActive) {
-        next = LED_MOVING;
-    } else {
-        next = LED_IDLE;
-    }
-    setLedState(next);
-}
 
 // =====================================================================
 // BLE NOTIFY HELPERS
@@ -684,6 +686,7 @@ static void updateFallStateMachine(float fallProb, bool stillnessNow, bool activ
                 gLastFallProb   = fallProb;
                 fallDetectState = FDS_FALL_WATCH;
                 fallWatchLeft   = FALL_WATCH_WINDOWS - 1;
+                setLedState(LED_FALL_WATCH);
                 Serial.printf("[FSM] IDLE -> FALL_WATCH (left=%d)\n", fallWatchLeft);
             }
             break;
@@ -693,6 +696,7 @@ static void updateFallStateMachine(float fallProb, bool stillnessNow, bool activ
             // phản xạ nhỏ sau ngã không đủ để huỷ
             if (cancelActive) {
                 fallDetectState = FDS_IDLE;
+                setLedState(gBleConnected ? LED_CONNECTED : LED_ADVERTISING);
                 Serial.printf("[FSM] FALL_WATCH: strong activity (%.2fg/%.1fdps) -> IDLE\n",
                               peakAcc, peakGyr);
                 break;
@@ -716,8 +720,7 @@ static void updateFallStateMachine(float fallProb, bool stillnessNow, bool activ
             if (monitorElapsed >= FALL_MONITOR_TIMEOUT_MS) {
                 fallDetectState     = FDS_IDLE;
                 stillnessTimerArmed = false;
-                // Dù đang nằm im hay cử động lúc timeout → đều an toàn
-                // (substance chưa hoàn thành thì cũng không báo)
+                setLedState(gBleConnected ? LED_CONNECTED : LED_ADVERTISING);
                 Serial.printf("[FSM] STILL_TIMING: timeout %lums -> IDLE (safe)\n",
                               (unsigned long)monitorElapsed);
                 break;
@@ -794,10 +797,8 @@ static void taskInference(void *pvParams) {
         snapshotWindow(gSnapshot);
         xSemaphoreGive(gImuMutex);
 
-        // While alarm active: skip inference but still update LED (keeps LED_ALARM)
         if (gFallAlertActive) {
-            aiWindowActive = false; // đóng window khi alarm đang active
-            updateLedFromPipeline(false, 0, false, false);
+            aiWindowActive = false;
             continue;
         }
 
@@ -826,9 +827,6 @@ static void taskInference(void *pvParams) {
             aiWindowActive = false;
         }
 
-        // LED: hiện CANDIDATE khi AI window đang mở (dù window này không có peak)
-        updateLedFromPipeline(activityActive, activityCount,
-                              candidateActive || aiWindowActive, isFall);
     }
 }
 
@@ -850,7 +848,7 @@ static void handleButton() {
             // Đang alarm → "I'm Safe": tắt loa, gửi SAFE
             gFallAlertActive = false;
             fallDetectState  = FDS_IDLE;
-            setLedState(LED_IDLE);
+            setLedState(gBleConnected ? LED_CONNECTED : LED_ADVERTISING);
             snprintf(buf, sizeof(buf), "SAFE,%lu,%lu",
                      (unsigned long)++gAlertSeq, (unsigned long)tsSec);
             notifyAlert(buf);
@@ -907,13 +905,17 @@ void setup() {
     Serial.println("=======================================================");
 
     // GPIO
-    pinMode(PIN_LED_GREEN,  OUTPUT);
-    pinMode(PIN_LED_YELLOW, OUTPUT);
-    pinMode(PIN_LED_RED,    OUTPUT);
-    pinMode(PIN_BUTTON,     INPUT_PULLUP);
-    pinMode(PIN_BUZZER,     OUTPUT);
+    pinMode(PIN_LED_VCC, OUTPUT);
+    digitalWrite(PIN_LED_VCC, HIGH);        // power the RGB module
+    pinMode(PIN_BUTTON,  INPUT_PULLUP);
+    pinMode(PIN_BUZZER,  OUTPUT);
     digitalWrite(PIN_BUZZER, LOW);
     tone(PIN_BUZZER, BUZZER_FREQ_HZ); noTone(PIN_BUZZER); // init LEDC at real freq (1Hz fails on S3)
+
+    gLedNeo.begin();
+    gLedNeo.setBrightness(50);              // ~20 % — stay within GPIO drive limit
+    gLedNeo.show();
+    applyLedState(LED_BOOT);
 
     // I2C
     Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 100000);
@@ -941,7 +943,7 @@ void setup() {
     // BLE setup — service registered before advertising (Android UUID filter requirement)
     NimBLEDevice::init("S3_AIFD_V1");
     NimBLEDevice::setPower(ESP_PWR_LVL_P9);
-    NimBLEDevice::setSecurityAuth(BLE_SM_PAIR_AUTHREQ_BOND);
+    // No bonding — open connection so Android does not reject on bond-key mismatch after reflash
     gBleServer = NimBLEDevice::createServer();
     gBleServer->setCallbacks(new BleServerCb());
 
@@ -967,7 +969,12 @@ void setup() {
     adv->setScanResponse(true);
     adv->start();
 
-    setLedState(LED_IDLE);
+    if (!bmiOk || !modelOk) {
+        gWarnExpireMs = 0; // permanent — sensor error requires reboot
+        setLedState(LED_WARNING);
+    } else {
+        setLedState(LED_ADVERTISING);
+    }
     Serial.println("[BOOT] Tasks started. Advertising as \"S3_AIFD_V1\"");
 }
 
@@ -976,6 +983,25 @@ void loop() {
     handleBlink();
     handleVitalsBatch();
     handleBmiSnapshot();
+
+    // BLE connect/disconnect → LED transition (flags set by callbacks, handled here)
+    if (gBleJustConnected) {
+        gBleJustConnected = false;
+        if (!gFallAlertActive && fallDetectState == FDS_IDLE)
+            setLedState(LED_CONNECTED);
+    }
+    if (gBleJustDisconnected) {
+        gBleJustDisconnected = false;
+        if (!gFallAlertActive && fallDetectState == FDS_IDLE) {
+            gWarnExpireMs = millis() + 3000;
+            setLedState(LED_WARNING);
+        }
+    }
+    // WARNING auto-return to ADVERTISING after timeout (BLE drop only; sensor error = permanent)
+    if (gLedState == LED_WARNING && gWarnExpireMs != 0 && millis() >= gWarnExpireMs) {
+        gWarnExpireMs = 0;
+        setLedState(LED_ADVERTISING);
+    }
 
     static uint32_t lastStatusMs = 0;
     uint32_t now = millis();

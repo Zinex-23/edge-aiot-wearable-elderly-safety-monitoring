@@ -150,6 +150,7 @@ fun DevicePairingScreen(
                     nearbyDevices.forEach { nearby ->
                         val isConnecting = connectingDeviceId == nearby.id
                         val isConnected = currentDevice?.id == nearby.id
+                                && currentDevice?.connectionStatus == ConnectionStatus.CONNECTED
 
                         Card(
                             onClick = { if (!isConnecting && !isConnected) onConnect(nearby) },

@@ -96,9 +96,18 @@ class BleForegroundService : Service() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED) {
                 val state = intent.getIntExtra(android.bluetooth.BluetoothAdapter.EXTRA_STATE, android.bluetooth.BluetoothAdapter.ERROR)
-                if (state == android.bluetooth.BluetoothAdapter.STATE_ON) {
-                    Log.i(TAG, "Bluetooth turned ON, re-triggering auto-connect…")
-                    bleManager.autoConnectBondedEsp32()
+                when (state) {
+                    android.bluetooth.BluetoothAdapter.STATE_OFF -> {
+                        // BT turned off: onConnectionStateChange is NOT called for pending connections,
+                        // so isConnecting would be stuck forever without this explicit reset.
+                        Log.i(TAG, "Bluetooth turned OFF — resetting connection state")
+                        bleManager.resetConnectingState()
+                    }
+                    android.bluetooth.BluetoothAdapter.STATE_ON -> {
+                        Log.i(TAG, "Bluetooth turned ON, re-triggering auto-connect…")
+                        bleManager.resetConnectingState()
+                        bleManager.autoConnectBondedEsp32()
+                    }
                 }
             }
         }
