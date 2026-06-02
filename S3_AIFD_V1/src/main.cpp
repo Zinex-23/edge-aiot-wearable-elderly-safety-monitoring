@@ -33,6 +33,7 @@
 #include <NimBLEDevice.h>
 #include <Adafruit_NeoPixel.h>
 #include <string>
+#include "MAX30105.h"
 
 // =====================================================================
 // PIN CONFIG
@@ -178,7 +179,8 @@ enum LedState : uint8_t {
     LED_ALARM          // red blink fast + buzzer — fall confirmed
 };
 static const char *LED_STATE_NAMES[] = {
-    "BOOT","ADVERTISING","CONNECTED","WARNING","FALL_WATCH","ALARM"
+    "BOOT(Blue)", "ADVERTISING(Yellow)", "CONNECTED(Green)", 
+    "WARNING(Yellow)", "FALL_WATCH(Red)", "ALARM(Red)"
 };
 
 static volatile LedState gLedState     = LED_BOOT;
@@ -335,7 +337,6 @@ static void notifyVitals(const char *payload) {
     if (!gBleReady || !gCharVitals) return;
     gCharVitals->setValue((uint8_t*)payload, strlen(payload));
     gCharVitals->notify();
-    Serial.printf("[BLE] VITALS notify: %s\n", payload);
 }
 
 // =====================================================================
@@ -353,11 +354,20 @@ static void notifyVitals(const char *payload) {
 //   3. Remove the `esp_random()` calls and delete the SIMULATED tag.
 // No BLE / parser changes are needed on either side.
 // =====================================================================
+static MAX30105 particleSensor;
+static bool maxOk = false;
+
 static uint8_t readHrSample() {
+    if (!maxOk) return 255;
+    long irValue = particleSensor.getIR();
+    if (irValue < 50000) return 255;
     // Fake data: 65-90 bpm
     return (uint8_t)(65 + (esp_random() % 26));
 }
 static uint8_t readSpo2Sample() {
+    if (!maxOk) return 255;
+    long irValue = particleSensor.getIR();
+    if (irValue < 50000) return 255;
     // Fake data: 93-99%
     return (uint8_t)(93 + (esp_random() % 7));
 }
@@ -373,6 +383,13 @@ static void sendInstantVitals() {
              (unsigned long)++gVitalsSeq,
              hr, spo2, (unsigned long)nowSec);
     notifyVitals(buf);
+    if (hr == 255) {
+        Serial.println("[VITALS] HR   : --");
+        Serial.println("[VITALS] SpO2 : --");
+    } else {
+        Serial.printf("[VITALS] HR   : %d bpm\n", hr);
+        Serial.printf("[VITALS] SpO2 : %d %%\n", spo2);
+    }
 }
 
 // Emit BATCH packet — 5 HR/SpO2 samples spaced 5s, every 25s
@@ -395,6 +412,14 @@ static void sendVitalsBatch() {
              (unsigned long)tss[2], (unsigned long)tss[3],
              (unsigned long)tss[4]);
     notifyVitals(buf);
+
+    Serial.print("[VITALS] HR   : ");
+    for (int i=0; i<5; i++) { if(hrs[i]==255) Serial.print("--  "); else Serial.printf("%-3d ", hrs[i]); }
+    Serial.println();
+    
+    Serial.print("[VITALS] SpO2 : ");
+    for (int i=0; i<5; i++) { if(spo2s[i]==255) Serial.print("--  "); else Serial.printf("%d%% ", spo2s[i]); }
+    Serial.println();
 }
 
 // =====================================================================
@@ -413,6 +438,7 @@ static void sendBmiSnapshot() {
              (unsigned long)++gBmiSeq,
              (unsigned long)nowSec, acc, gyr, active);
     notifyVitals(buf);
+    Serial.printf("[VITALS] BMI  : Acc=%.2fg, Gyro=%.1fdps\n", acc, gyr);
 }
 
 // =====================================================================
@@ -560,15 +586,21 @@ static bool runInferenceOnSnapshot(const ImuSample *snap,
     gLastPeakGyro = maxGyr;
     gLastActive   = activityActive;
 
-    // Activity gate: 3 consecutive active windows; any idle window resets everything
+    static int idleCount = 0; // Đếm số window nhàn rỗi
+
+    // Activity gate: 3 consecutive active windows. 3 consecutive idle windows resets everything.
     if (activityActive) {
+        idleCount = 0;
         if (activityCount < ACTIVITY_WINDOW_COUNT) activityCount++;
         // Track if any window in this streak had a violent high-impact peak
         if (maxAcc > HIGH_IMPACT_ACC_MIN && maxGyr > HIGH_IMPACT_GYRO_MIN)
             highImpactSeen = true;
     } else {
-        activityCount   = 0;
-        highImpactSeen  = false;
+        idleCount++;
+        if (idleCount >= 3) {
+            activityCount   = 0;
+            highImpactSeen  = false;
+        }
     }
 
     Serial.printf("[GATE] acc=%.2fg gyro=%.1fdps  cand=%s  activity=%d/%d  highImpact=%s\n",
@@ -891,6 +923,23 @@ static void handleBmiSnapshot() {
 }
 
 // =====================================================================
+// MAX30102 DEBUG TIMER — every 5 s (show IR value)
+// =====================================================================
+static void handleMaxDebug() {
+    static uint32_t lastMaxMs = 0;
+    uint32_t now = millis();
+    if ((uint32_t)(now - lastMaxMs) >= 5000) {
+        lastMaxMs = now;
+        if (maxOk) {
+            long irValue = particleSensor.getIR();
+            Serial.printf("[MAX] IR = %ld -> %s\n", irValue, (irValue >= 50000) ? "Finger DETECTED" : "No finger");
+        } else {
+            Serial.println("[MAX] Error: Sensor not initialized (maxOk = false)");
+        }
+    }
+}
+
+// =====================================================================
 // ARDUINO ENTRY
 // =====================================================================
 void setup() {
@@ -927,6 +976,16 @@ void setup() {
     bmiOk = initBMI160();
     Serial.printf("[BMI]   %s (addr=0x%02X)\n", bmiOk ? "OK" : "NOT FOUND", bmi160Addr);
 
+    // MAX30102
+    if (particleSensor.begin(Wire, I2C_SPEED_FAST)) {
+        particleSensor.setup(); // Default setup
+        maxOk = true;
+        Serial.println("[MAX]   OK");
+    } else {
+        Serial.println("[MAX]   NOT FOUND");
+        maxOk = false;
+    }
+
     // TFLite model
     modelOk = initModel();
     if (!modelOk) Serial.println("[MODEL] init failed — fall detection disabled");
@@ -943,6 +1002,10 @@ void setup() {
     // BLE setup — service registered before advertising (Android UUID filter requirement)
     NimBLEDevice::init("S3_AIFD_V1");
     NimBLEDevice::setPower(ESP_PWR_LVL_P9);
+    
+    // Clear all previously saved bonds in NVS so that a reset guarantees a clean state
+    NimBLEDevice::deleteAllBonds();
+
     // No bonding — open connection so Android does not reject on bond-key mismatch after reflash
     gBleServer = NimBLEDevice::createServer();
     gBleServer->setCallbacks(new BleServerCb());
@@ -983,6 +1046,7 @@ void loop() {
     handleBlink();
     handleVitalsBatch();
     handleBmiSnapshot();
+    handleMaxDebug();
 
     // BLE connect/disconnect → LED transition (flags set by callbacks, handled here)
     if (gBleJustConnected) {
