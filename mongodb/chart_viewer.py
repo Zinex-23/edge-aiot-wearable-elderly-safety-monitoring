@@ -30,6 +30,8 @@ def bucket_cloud(items: list, slot_count: int, slot_ms: int, now_ms: int):
     hr_count = [0]   * slot_count
     sp_sum   = [0.0] * slot_count
     sp_count = [0]   * slot_count
+    bat_sum  = [0.0] * slot_count
+    bat_count= [0]   * slot_count
 
     for item in items:
         ts = item.get("timestamp")
@@ -51,18 +53,23 @@ def bucket_cloud(items: list, slot_count: int, slot_ms: int, now_ms: int):
         idx = int((ts_ms - oldest_slot) / slot_ms)
         idx = max(0, min(idx, slot_count - 1))
 
-        hr = item.get("heartRate")
-        sp = item.get("spo2")
+        hr  = item.get("heartRate")
+        sp  = item.get("spo2")
+        bat = item.get("battery")
         if hr is not None and int(hr) > 0:
             hr_sum[idx]   += int(hr)
             hr_count[idx] += 1
         if sp is not None and int(sp) > 0:
             sp_sum[idx]   += int(sp)
             sp_count[idx] += 1
+        if bat is not None and int(bat) > 0:
+            bat_sum[idx]   += int(bat)
+            bat_count[idx] += 1
 
     hr_out  = [round(hr_sum[i] / hr_count[i])  if hr_count[i]  > 0 else None for i in range(slot_count)]
     sp_out  = [round(sp_sum[i] / sp_count[i])  if sp_count[i]  > 0 else None for i in range(slot_count)]
-    return hr_out, sp_out
+    bat_out = [round(bat_sum[i] / bat_count[i]) if bat_count[i] > 0 else None for i in range(slot_count)]
+    return hr_out, sp_out, bat_out
 
 
 def slot_labels(slot_count: int, slot_ms: int, now_ms: int) -> list[str]:
@@ -71,7 +78,12 @@ def slot_labels(slot_count: int, slot_ms: int, now_ms: int) -> list[str]:
     out = []
     for i in range(slot_count):
         dt = datetime.fromtimestamp((oldest_slot + i * slot_ms) / 1000, tz=timezone.utc)
-        out.append(dt.strftime("%H:%M") if slot_ms < 3_600_000 else dt.strftime("%m/%d %H:00"))
+        if slot_ms >= 86_400_000:
+            out.append(dt.strftime("%m/%d"))
+        elif slot_ms < 3_600_000:
+            out.append(dt.strftime("%H:%M"))
+        else:
+            out.append(dt.strftime("%m/%d %H:00"))
     return out
 
 
@@ -103,17 +115,18 @@ def api_vitals():
     now       = datetime.now(timezone.utc)
     now_ms    = int(now.timestamp() * 1000)
 
-    # ── LIVE: last 10 min, individual readings, line chart ────────────────
-    if range_str == "live":
-        since = now - timedelta(minutes=10)
+    # ── LIVE: last 5 min, individual readings, line chart ────────────────
+    if range_str == "5m":
+        since = now - timedelta(minutes=5)
         docs  = list(col.find(
             {"userId": user_id, "timestamp": {"$gte": since}},
-            {"_id": 0, "timestamp": 1, "heartRate": 1, "spo2": 1}
-        ).sort("timestamp", ASCENDING).limit(40))
+            {"_id": 0, "timestamp": 1, "heartRate": 1, "spo2": 1, "battery": 1}
+        ).sort("timestamp", ASCENDING).limit(100))
 
-        labels  = []
-        hr_vals = []
-        sp_vals = []
+        labels   = []
+        hr_vals  = []
+        sp_vals  = []
+        bat_vals = []
         for d in docs:
             ts = d.get("timestamp")
             if isinstance(ts, datetime) and ts.tzinfo is None:
@@ -121,20 +134,23 @@ def api_vitals():
             labels.append(ts.strftime("%H:%M:%S") if isinstance(ts, datetime) else str(ts))
             hr_vals.append(d.get("heartRate"))
             sp_vals.append(d.get("spo2"))
+            bat_vals.append(d.get("battery"))
 
         # Stats từ 1h gần nhất (cho mini stats row)
         since_1h = now - timedelta(hours=1)
         docs_1h  = list(col.find(
             {"userId": user_id, "timestamp": {"$gte": since_1h}},
-            {"_id": 0, "heartRate": 1, "spo2": 1}
+            {"_id": 0, "heartRate": 1, "spo2": 1, "battery": 1}
         ))
         hr_1h = [d["heartRate"] for d in docs_1h if d.get("heartRate") and d["heartRate"] > 0]
         sp_1h = [d["spo2"]      for d in docs_1h if d.get("spo2")      and d["spo2"]      > 0]
+        bat_1h= [d["battery"]   for d in docs_1h if d.get("battery")   and d["battery"]   > 0]
 
         return jsonify({
             "labels":    labels,
             "hr":        hr_vals,
             "spo2":      sp_vals,
+            "battery":   bat_vals,
             "stats": {
                 "hr":   {"current": hr_vals[-1] if hr_vals else None,
                          "min": min(hr_1h) if hr_1h else None,
@@ -144,6 +160,10 @@ def api_vitals():
                          "min": min(sp_1h) if sp_1h else None,
                          "max": max(sp_1h) if sp_1h else None,
                          "avg": round(sum(sp_1h) / len(sp_1h), 1) if sp_1h else None},
+                "battery": {"current": bat_vals[-1] if bat_vals else None,
+                            "min": min(bat_1h) if bat_1h else None,
+                            "max": max(bat_1h) if bat_1h else None,
+                            "avg": round(sum(bat_1h) / len(bat_1h), 1) if bat_1h else None},
             },
             "chartType": "line",
             "count":     len(labels),
@@ -154,18 +174,19 @@ def api_vitals():
         since = now - timedelta(hours=1)
         docs  = list(col.find(
             {"userId": user_id, "timestamp": {"$gte": since}},
-            {"_id": 0, "timestamp": 1, "heartRate": 1, "spo2": 1}
+            {"_id": 0, "timestamp": 1, "heartRate": 1, "spo2": 1, "battery": 1}
         ).sort("timestamp", DESCENDING).limit(300))
         docs.reverse()
 
-        hr_buckets, sp_buckets = bucket_cloud(docs, 12, 5 * 60_000, now_ms)
+        hr_buckets, sp_buckets, bat_buckets = bucket_cloud(docs, 12, 5 * 60_000, now_ms)
         labels = slot_labels(12, 5 * 60_000, now_ms)
 
         return jsonify({
             "labels":    labels,
             "hr":        hr_buckets,
             "spo2":      sp_buckets,
-            "stats":     {"hr": make_stats(hr_buckets), "spo2": make_stats(sp_buckets)},
+            "battery":   bat_buckets,
+            "stats":     {"hr": make_stats(hr_buckets), "spo2": make_stats(sp_buckets), "battery": make_stats(bat_buckets)},
             "chartType": "bar",
             "count":     len(docs),
         })
@@ -179,6 +200,7 @@ def api_vitals():
                 "_id":     {"$dateToString": {"format": "%Y-%m-%dT%H:00:00Z", "date": "$timestamp"}},
                 "avgHR":   {"$avg": "$heartRate"},
                 "avgSpo2": {"$avg": "$spo2"},
+                "avgBat":  {"$avg": "$battery"},
                 "count":   {"$sum": 1},
             }},
             {"$sort":  {"_id": 1}},
@@ -189,11 +211,12 @@ def api_vitals():
                 "timestamp": b["_id"],
                 "heartRate": round(b["avgHR"])   if b.get("avgHR")   is not None else None,
                 "spo2":      round(b["avgSpo2"]) if b.get("avgSpo2") is not None else None,
+                "battery":   round(b["avgBat"])  if b.get("avgBat")  is not None else None,
             }
             for b in col.aggregate(pipeline)
         ]
 
-        hr_buckets, sp_buckets = bucket_cloud(agg_items, 24, 60 * 60_000, now_ms)
+        hr_buckets, sp_buckets, bat_buckets = bucket_cloud(agg_items, 24, 60 * 60_000, now_ms)
         labels = slot_labels(24, 60 * 60_000, now_ms)
         raw_count = sum(
             b.get("count", 0)
@@ -207,8 +230,97 @@ def api_vitals():
             "labels":    labels,
             "hr":        hr_buckets,
             "spo2":      sp_buckets,
-            "stats":     {"hr": make_stats(hr_buckets), "spo2": make_stats(sp_buckets)},
+            "battery":   bat_buckets,
+            "stats":     {"hr": make_stats(hr_buckets), "spo2": make_stats(sp_buckets), "battery": make_stats(bat_buckets)},
             "chartType": "bar",
+            "count":     raw_count,
+        })
+
+    # ── 3D: hourly aggregation server-side, 72 slots × 1h, bar chart ────
+    elif range_str == "3d":
+        since    = now - timedelta(days=3)
+        pipeline = [
+            {"$match": {"userId": user_id, "timestamp": {"$gte": since, "$lte": now}}},
+            {"$group": {
+                "_id":     {"$dateToString": {"format": "%Y-%m-%dT%H:00:00Z", "date": "$timestamp"}},
+                "avgHR":   {"$avg": "$heartRate"},
+                "avgSpo2": {"$avg": "$spo2"},
+                "avgBat":  {"$avg": "$battery"},
+                "count":   {"$sum": 1},
+            }},
+            {"$sort":  {"_id": 1}},
+        ]
+        agg_items = [
+            {
+                "timestamp": b["_id"],
+                "heartRate": round(b["avgHR"])   if b.get("avgHR")   is not None else None,
+                "spo2":      round(b["avgSpo2"]) if b.get("avgSpo2") is not None else None,
+                "battery":   round(b["avgBat"])  if b.get("avgBat")  is not None else None,
+            }
+            for b in col.aggregate(pipeline)
+        ]
+
+        hr_buckets, sp_buckets, bat_buckets = bucket_cloud(agg_items, 72, 60 * 60_000, now_ms)
+        labels = slot_labels(72, 60 * 60_000, now_ms)
+        raw_count = sum(
+            b.get("count", 0)
+            for b in col.aggregate([
+                {"$match": {"userId": user_id, "timestamp": {"$gte": since, "$lte": now}}},
+                {"$count": "count"}
+            ])
+        )
+
+        return jsonify({
+            "labels":    labels,
+            "hr":        hr_buckets,
+            "spo2":      sp_buckets,
+            "battery":   bat_buckets,
+            "stats":     {"hr": make_stats(hr_buckets), "spo2": make_stats(sp_buckets), "battery": make_stats(bat_buckets)},
+            "chartType": "bar",
+            "count":     raw_count,
+        })
+
+    # ── 7D: hourly aggregation server-side, 168 slots × 1h, line chart ────
+    elif range_str == "7d":
+        since    = now - timedelta(days=7)
+        pipeline = [
+            {"$match": {"userId": user_id, "timestamp": {"$gte": since, "$lte": now}}},
+            {"$group": {
+                "_id":     {"$dateToString": {"format": "%Y-%m-%dT%H:00:00Z", "date": "$timestamp"}},
+                "avgHR":   {"$avg": "$heartRate"},
+                "avgSpo2": {"$avg": "$spo2"},
+                "avgBat":  {"$avg": "$battery"},
+                "count":   {"$sum": 1},
+            }},
+            {"$sort":  {"_id": 1}},
+        ]
+        agg_items = [
+            {
+                "timestamp": b["_id"],
+                "heartRate": round(b["avgHR"])   if b.get("avgHR")   is not None else None,
+                "spo2":      round(b["avgSpo2"]) if b.get("avgSpo2") is not None else None,
+                "battery":   round(b["avgBat"])  if b.get("avgBat")  is not None else None,
+            }
+            for b in col.aggregate(pipeline)
+        ]
+
+        hr_buckets, sp_buckets, bat_buckets = bucket_cloud(agg_items, 168, 60 * 60_000, now_ms)
+        labels = slot_labels(168, 60 * 60_000, now_ms)
+        raw_count = sum(
+            b.get("count", 0)
+            for b in col.aggregate([
+                {"$match": {"userId": user_id, "timestamp": {"$gte": since, "$lte": now}}},
+                {"$count": "count"}
+            ])
+        )
+
+        return jsonify({
+            "labels":    labels,
+            "hr":        hr_buckets,
+            "spo2":      sp_buckets,
+            "battery":   bat_buckets,
+            "stats":     {"hr": make_stats(hr_buckets), "spo2": make_stats(sp_buckets), "battery": make_stats(bat_buckets)},
+            "chartType": "line",
             "count":     raw_count,
         })
 
@@ -240,13 +352,14 @@ body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFo
 .mtab{flex:1;padding:10px 6px;border-radius:10px;border:2px solid #30363d;background:#0d1117;color:#8b949e;font-size:13px;font-weight:600;cursor:pointer;text-align:center;transition:all .2s}
 .mtab.hr-on{border-color:#58a6ff;color:#58a6ff;background:rgba(88,166,255,.1)}
 .mtab.sp-on{border-color:#3fb950;color:#3fb950;background:rgba(63,185,80,.1)}
+.mtab.bat-on{border-color:#d29922;color:#d29922;background:rgba(210,153,34,.1)}
 
 /* Big value */
 .bigval{text-align:center;margin-bottom:16px}
 .bigval .num{font-size:60px;font-weight:700;line-height:1;letter-spacing:-2px}
 .bigval .unit{font-size:20px;color:#8b949e;margin-left:2px}
 .bigval .lbl{font-size:12px;color:#8b949e;margin-top:4px;text-transform:uppercase;letter-spacing:.8px}
-.hr-color{color:#58a6ff}.sp-color{color:#3fb950}
+.hr-color{color:#58a6ff}.sp-color{color:#3fb950}.bat-color{color:#d29922}
 
 /* Chart */
 .chart-wrap{position:relative;height:210px;margin-bottom:14px}
@@ -287,6 +400,7 @@ body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFo
 .data-table tr:last-child td{border:none}
 .val-hr{color:#58a6ff;font-weight:600}
 .val-sp{color:#3fb950;font-weight:600}
+.val-bat{color:#d29922;font-weight:600}
 .val-null{color:#484f58}
 </style>
 </head>
@@ -302,6 +416,7 @@ body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFo
   <div class="metric-tabs">
     <button class="mtab hr-on" id="mHR"  onclick="setMetric('hr')">❤ Heart Rate</button>
     <button class="mtab"       id="mSP"  onclick="setMetric('spo2')">💧 SpO₂</button>
+    <button class="mtab"       id="mBAT" onclick="setMetric('battery')">🔋 Pin</button>
   </div>
 
   <!-- Big value -->
@@ -315,17 +430,19 @@ body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFo
 
   <!-- Range tabs -->
   <div class="rtabs">
-    <button class="rtab on" id="rLive" onclick="setRange('live')">Live</button>
+    <button class="rtab on" id="r5m"   onclick="setRange('5m')">5m</button>
     <button class="rtab"    id="r1h"   onclick="setRange('1h')">1H</button>
     <button class="rtab"    id="r24h"  onclick="setRange('24h')">24H</button>
+    <button class="rtab"    id="r3d"   onclick="setRange('3d')">3D</button>
+    <button class="rtab"    id="r7d"   onclick="setRange('7d')">7D</button>
   </div>
 
   <!-- Stats -->
-  <div class="stats">
+  <div class="stats" id="statsGrid">
     <div class="scard"><div class="slbl">Current</div><div class="sval" id="sCur"  style="color:#e6edf3">–</div></div>
-    <div class="scard"><div class="slbl">Min</div>    <div class="sval" id="sMin"  style="color:#58a6ff">–</div></div>
-    <div class="scard"><div class="slbl">Max</div>    <div class="sval" id="sMax"  style="color:#f85149">–</div></div>
-    <div class="scard"><div class="slbl">Avg</div>    <div class="sval" id="sAvg"  style="color:#e6edf3">–</div></div>
+    <div class="scard" id="cardMin"><div class="slbl">Min</div>    <div class="sval" id="sMin"  style="color:#58a6ff">–</div></div>
+    <div class="scard" id="cardMax"><div class="slbl">Max</div>    <div class="sval" id="sMax"  style="color:#f85149">–</div></div>
+    <div class="scard" id="cardAvg"><div class="slbl">Avg</div>    <div class="sval" id="sAvg"  style="color:#e6edf3">–</div></div>
   </div>
 
   <!-- Status bar -->
@@ -339,20 +456,20 @@ body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFo
 <div class="data-card">
   <h3 id="tableTitle">Recent records</h3>
   <table class="data-table">
-    <thead><tr><th>#</th><th>Timestamp (UTC)</th><th>HR (bpm)</th><th>SpO₂ (%)</th></tr></thead>
+    <thead><tr><th>#</th><th>Timestamp (UTC)</th><th>HR (bpm)</th><th>SpO₂ (%)</th><th>Pin (%)</th></tr></thead>
     <tbody id="tbody"></tbody>
   </table>
 </div>
 
 <script>
 // ── State ──────────────────────────────────────────────────────────────────
-let range  = 'live';
+let range  = '5m';
 let metric = 'hr';
 let user   = '';
 let chart  = null;
 let timer  = null;
 let cache  = null;
-const INTERVALS = { live: 10_000, '1h': 60_000, '24h': 300_000 };
+const INTERVALS = { '5m': 10_000, '1h': 60_000, '24h': 300_000, '3d': 600_000, '7d': 600_000 };
 
 // ── Init ───────────────────────────────────────────────────────────────────
 async function init() {
@@ -381,8 +498,8 @@ function onUser() {
 function setRange(r) {
   clearTimeout(timer);
   range = r;
-  ['live','1h','24h'].forEach(x => document.getElementById(x==='live'?'rLive':'r'+x).classList.remove('on'));
-  document.getElementById(r === 'live' ? 'rLive' : 'r' + r).classList.add('on');
+  ['5m','1h','24h','3d','7d'].forEach(x => document.getElementById('r'+x).classList.remove('on'));
+  document.getElementById('r' + r).classList.add('on');
   if (chart) { chart.destroy(); chart = null; }
   load();
 }
@@ -390,11 +507,14 @@ function setRange(r) {
 function setMetric(m) {
   metric = m;
   const isHR = m === 'hr';
+  const isSP = m === 'spo2';
+  const isBAT= m === 'battery';
   document.getElementById('mHR').className = 'mtab' + (isHR  ? ' hr-on' : '');
-  document.getElementById('mSP').className = 'mtab' + (!isHR ? ' sp-on' : '');
+  document.getElementById('mSP').className = 'mtab' + (isSP  ? ' sp-on' : '');
+  document.getElementById('mBAT').className= 'mtab' + (isBAT ? ' bat-on': '');
   document.getElementById('bigUnit').textContent = isHR ? 'bpm' : '%';
-  document.getElementById('bigLbl').textContent  = isHR ? 'Heart Rate' : 'SpO₂';
-  document.getElementById('bigNum').className    = 'num ' + (isHR ? 'hr-color' : 'sp-color');
+  document.getElementById('bigLbl').textContent  = isHR ? 'Heart Rate' : (isSP ? 'SpO₂' : 'Pin');
+  document.getElementById('bigNum').className    = 'num ' + (isHR ? 'hr-color' : (isSP ? 'sp-color' : 'bat-color'));
   if (cache) renderUI(cache);
 }
 
@@ -417,10 +537,13 @@ async function load() {
 function renderUI(data) {
   if (!data) return;
   const isHR = metric === 'hr';
-  const vals  = isHR ? data.hr   : data.spo2;
-  const stats = isHR ? data.stats?.hr : data.stats?.spo2;
-  const color = isHR ? '#58a6ff' : '#3fb950';
-  const colorFade = isHR ? 'rgba(88,166,255,.14)' : 'rgba(63,185,80,.14)';
+  const isSP = metric === 'spo2';
+  const isBAT= metric === 'battery';
+  
+  const vals  = isHR ? data.hr : (isSP ? data.spo2 : data.battery);
+  const stats = isHR ? data.stats?.hr : (isSP ? data.stats?.spo2 : data.stats?.battery);
+  const color = isHR ? '#58a6ff' : (isSP ? '#3fb950' : '#d29922');
+  const colorFade = isHR ? 'rgba(88,166,255,.14)' : (isSP ? 'rgba(63,185,80,.14)' : 'rgba(210,153,34,.14)');
   const unit  = isHR ? 'bpm' : '%';
   const isLine = data.chartType === 'line';
 
@@ -435,6 +558,13 @@ function renderUI(data) {
   document.getElementById('sMax').textContent = fmt(stats?.max);
   document.getElementById('sAvg').textContent = stats?.avg != null ? stats.avg + ' ' + unit : '–';
 
+  // Hide Min/Max/Avg for Battery
+  const dsp = isBAT ? 'none' : 'block';
+  document.getElementById('cardMin').style.display = dsp;
+  document.getElementById('cardMax').style.display = dsp;
+  document.getElementById('cardAvg').style.display = dsp;
+  document.getElementById('statsGrid').style.gridTemplateColumns = isBAT ? '1fr' : '1fr 1fr 1fr 1fr';
+
   // Chart data — null/0 → NaN (gap in chart)
   const chartData = (vals || []).map(v => (v != null && v > 0) ? v : NaN);
   const labels    = data.labels || [];
@@ -447,8 +577,8 @@ function renderUI(data) {
     chart.data.datasets[0].borderColor      = color;
     chart.data.datasets[0].backgroundColor  = isLine ? colorFade : barColors;
     chart.data.datasets[0].pointBackgroundColor = color;
-    chart.options.scales.y.min = isHR ? 40 : 80;
-    chart.options.scales.y.max = isHR ? 140 : 101;
+    chart.options.scales.y.min = isHR ? 40 : (isSP ? 80 : 0);
+    chart.options.scales.y.max = isHR ? 140 : (isSP ? 101 : 105);
     chart.update('active');
   } else {
     // Rebuild chart (type changed or first load)
@@ -491,12 +621,12 @@ function renderUI(data) {
         },
         scales: {
           x: {
-            ticks: { color: '#8b949e', font: { size: 10 }, maxTicksLimit: range === '24h' ? 8 : 12, maxRotation: 35 },
+            ticks: { color: '#8b949e', font: { size: 10 }, maxTicksLimit: range === '7d' ? 7 : (range === '3d' ? 12 : (range === '24h' ? 8 : 12)), maxRotation: 35 },
             grid:  { color: '#1c2128' }
           },
           y: {
-            min: isHR ? 40 : 80,
-            max: isHR ? 140 : 101,
+            min: isHR ? 40 : (isSP ? 80 : 0),
+            max: isHR ? 140 : (isSP ? 101 : 105),
             ticks: { color: '#8b949e', font: { size: 11 } },
             grid:  { color: '#1c2128' }
           }
@@ -516,26 +646,29 @@ function renderTable(data, isHR) {
   const labels = data.labels || [];
   const hr     = data.hr    || [];
   const spo2   = data.spo2  || [];
+  const bat    = data.battery || [];
 
   let rows = '';
   const n = labels.length;
 
   if (n === 0) {
     title.textContent = 'No data';
-    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#8b949e;padding:16px">No records found for this user/range</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#8b949e;padding:16px">No records found for this user/range</td></tr>';
     return;
   }
 
-  title.textContent = `${range === 'live' ? 'Last readings (live)' : range === '1h' ? '1H buckets (5-min avg)' : '24H buckets (hourly avg)'}  ·  ${data.count || n} raw records`;
+  title.textContent = `${range === '5m' ? 'Last readings (5m)' : range === '1h' ? '1H buckets (5-min avg)' : range === '24h' ? '24H buckets (hourly avg)' : range === '3d' ? '3D buckets (hourly avg)' : '7D buckets (hourly avg)'}  ·  ${data.count || n} raw records`;
 
   // Show all rows (max 30 for live, all for 1h/24h)
-  const show = range === 'live' ? Math.min(n, 30) : n;
+  const show = range === '5m' ? Math.min(n, 30) : n;
   for (let i = 0; i < show; i++) {
     const hrVal = hr[i];
     const spVal = spo2[i];
+    const batVal= bat[i];
     const hrStr = (hrVal != null && hrVal > 0) ? `<span class="val-hr">${hrVal}</span>` : `<span class="val-null">–</span>`;
     const spStr = (spVal != null && spVal > 0) ? `<span class="val-sp">${spVal}</span>` : `<span class="val-null">–</span>`;
-    rows += `<tr><td>${i}</td><td>${labels[i]}</td><td>${hrStr}</td><td>${spStr}</td></tr>`;
+    const batStr= (batVal != null && batVal > 0) ? `<span class="val-bat">${batVal}%</span>` : `<span class="val-null">–</span>`;
+    rows += `<tr><td>${i}</td><td>${labels[i]}</td><td>${hrStr}</td><td>${spStr}</td><td>${batStr}</td></tr>`;
   }
   tbody.innerHTML = rows;
 }
@@ -543,7 +676,7 @@ function renderTable(data, isHR) {
 // ── Status helper ──────────────────────────────────────────────────────────
 function setStatus(state, count, msg) {
   const el = document.getElementById('status');
-  const refreshInfo = { live: '10s', '1h': '1min', '24h': '5min' }[range];
+  const refreshInfo = { '5m': '10s', '1h': '1min', '24h': '5min', '3d': '10min', '7d': '10min' }[range];
   if (state === 'loading') {
     el.innerHTML = `<span class="spinner"></span>Loading...`;
   } else if (state === 'ok') {
