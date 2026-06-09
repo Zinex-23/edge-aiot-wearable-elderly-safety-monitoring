@@ -152,11 +152,20 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun observeBleData() {
         val ble = service?.bleManager ?: return
+        val prefs = getApplication<Application>()
+            .getSharedPreferences("aifd_prefs", Context.MODE_PRIVATE)
+        val username = prefs.getString("username", "") ?: ""
 
         viewModelScope.launch {
             ble.sensorData.collect { data ->
+                if (data.heartRate == 0 && data.spo2 == 0) return@collect
+
+                // Pure state computation — no I/O inside update lambda
+                var newHRHistory: List<Int> = emptyList()
+                var newSpO2History: List<Int> = emptyList()
+                var newHealthData: HealthData? = null
+
                 _uiState.update { state ->
-                    val username = getApplication<Application>().getSharedPreferences("aifd_prefs", Context.MODE_PRIVATE).getString("username", "") ?: ""
                     val health = state.healthData ?: if (username == "000") MockDataProvider.createHealthData() else HealthData(
                         heartRate = 0,
                         heartRateStatus = HealthStatus.NORMAL,
@@ -170,28 +179,20 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         stepGoal = 10000,
                         lastUpdated = Date()
                     )
-                    
-                    // Only update if we have a valid heart rate or SpO2
-                    if (data.heartRate == 0 && data.spo2 == 0) return@update state
 
                     val hrStatus = when {
                         data.heartRate > 100 -> HealthStatus.HIGH
                         data.heartRate < 60 && data.heartRate > 0 -> HealthStatus.LOW
                         else -> HealthStatus.NORMAL
                     }
-
                     val spO2Status = if (data.spo2 < 95 && data.spo2 > 0) HealthStatus.LOW else HealthStatus.NORMAL
 
-                    // Update history by dropping oldest and adding newest
-                    val newHRHistory = if (data.heartRate > 0) {
-                        health.heartRateHistory.drop(1) + data.heartRate
-                    } else health.heartRateHistory
+                    newHRHistory = if (data.heartRate > 0) health.heartRateHistory.drop(1) + data.heartRate
+                                   else health.heartRateHistory
+                    newSpO2History = if (data.spo2 > 0) health.spO2History.drop(1) + data.spo2
+                                     else health.spO2History
 
-                    val newSpO2History = if (data.spo2 > 0) {
-                        health.spO2History.drop(1) + data.spo2
-                    } else health.spO2History
-
-                    val newHealthData = health.copy(
+                    newHealthData = health.copy(
                         heartRate = if (data.heartRate > 0) data.heartRate else health.heartRate,
                         heartRateStatus = hrStatus,
                         heartRateHistory = newHRHistory,
@@ -202,17 +203,20 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         spO2History = newSpO2History,
                         lastUpdated = Date()
                     )
-                    // Persist for real accounts only
-                    if (username != "000") {
-                        getApplication<Application>().getSharedPreferences("aifd_prefs", Context.MODE_PRIVATE).edit {
-                            putInt("last_heart_rate", newHealthData.heartRate)
-                            putInt("last_spo2", newHealthData.spO2)
-                            putLong("last_vital_timestamp", System.currentTimeMillis())
-                            putString("hr_history", newHRHistory.joinToString(","))
-                            putString("spo2_history", newSpO2History.joinToString(","))
-                        }
-                    }
                     state.copy(healthData = newHealthData)
+                }
+
+                // Persist AFTER state update — SharedPreferences.apply() is async but
+                // calling it inside _uiState.update held the main-thread update lock longer.
+                val health = newHealthData ?: return@collect
+                if (username != "000") {
+                    prefs.edit {
+                        putInt("last_heart_rate", health.heartRate)
+                        putInt("last_spo2", health.spO2)
+                        putLong("last_vital_timestamp", System.currentTimeMillis())
+                        putString("hr_history", newHRHistory.joinToString(","))
+                        putString("spo2_history", newSpO2History.joinToString(","))
+                    }
                 }
             }
         }

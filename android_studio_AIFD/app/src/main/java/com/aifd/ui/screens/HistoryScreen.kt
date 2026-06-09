@@ -39,6 +39,7 @@ fun HistoryScreen(
     val strings = AppLocalizations.strings
     var filter by remember { mutableStateOf("all") }
     var showClearDialog by remember { mutableStateOf(false) }
+    var showAll by remember { mutableStateOf(false) }
 
     val filteredEvents = when (filter) {
         "fall"       -> events.filter { it.type == EventType.FALL }
@@ -48,6 +49,13 @@ fun HistoryScreen(
         "alert"      -> events.filter { it.type == EventType.ALERT }
         else         -> events
     }
+
+    // Reset về trang đầu khi đổi filter
+    LaunchedEffect(filter) { showAll = false }
+
+    val PAGE_SIZE = 10
+    val displayedEvents = if (showAll) filteredEvents else filteredEvents.take(PAGE_SIZE)
+    val hiddenCount = filteredEvents.size - displayedEvents.size
 
     Column(
         modifier = Modifier
@@ -104,8 +112,21 @@ fun HistoryScreen(
                               else strings.noFilteredEvents(filter)
                 )
             } else {
-                filteredEvents.forEach { event ->
+                displayedEvents.forEach { event ->
                     EventListItem(event = event, onClick = { onEventClick(event.id) })
+                }
+
+                // Nút "Xem thêm" — chỉ hiện khi còn thông báo ẩn
+                if (hiddenCount > 0) {
+                    OutlinedButton(
+                        onClick = { showAll = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.ExpandMore, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Xem thêm $hiddenCount thông báo", style = MaterialTheme.typography.labelLarge)
+                    }
                 }
             }
 

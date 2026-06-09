@@ -1,7 +1,7 @@
 # TEST PLAN OVERVIEW — AIFD Wearable Safety System
 
 > **Project:** AI Fall Detection — Intelligent Edge AIoT Wearable for Real-Time Elderly Safety Monitoring
-> **Revision:** 2026-05-29
+> **Revision:** 2026-06-05
 > **Scope:** Toàn bộ hệ thống gồm firmware ESP32-S3, ứng dụng Android, và nền tảng Cloud
 
 **Quy ước trạng thái:**
@@ -211,11 +211,11 @@ Acceptance test mô phỏng kịch bản sử dụng thực tế của người 
 
 | Scenario | Test ID | Hành động | Kết quả mong đợi | Note | Pass/Fail |
 | :--- | :--- | :--- | :--- | :--- | :---: |
-| **SC_01: Ngồi / Đứng nhanh** | `AT_ADL_01` | Người đeo ngồi xuống ghế nhanh và đứng dậy nhanh liên tục | Không có alert nào được phát | Ngồi xuống nhanh tạo impact khi chạm ghế — gia tốc Z tăng đột ngột giống một phần pattern ngã. Đây là false positive phổ biến nhất cần kiểm tra kỹ. | ⬜ |
-| **SC_02: Cúi nhặt đồ** | `AT_ADL_02` | Người đeo cúi người xuống nhặt vật dưới sàn rồi đứng thẳng | Không có alert nào được phát | Cúi người tạo ra rotation (gyro cao) và thay đổi orientation của IMU — hai đặc trưng cũng có trong ngã. Model phải phân biệt được ngồi xổm / cúi người với ngã sang bên. | ⬜ |
-| **SC_03: Vận động mạnh** | `AT_ADL_03` | Người đeo đi bộ nhanh, vẫy tay mạnh, tập thể dục nhẹ (xoay người, nhảy nhẹ) | Không có alert nào được phát | Vận động mạnh tạo nhiều noise và peak acceleration. Nếu model có false positive rate cao với hoạt động thể chất, người dùng sẽ tắt cảnh báo — phá vỡ toàn bộ mục đích hệ thống. | ⬜ |
-| **SC_04: Leo / Xuống cầu thang** | `AT_ADL_04` | Người đeo đi lên và xuống cầu thang bình thường | Không có alert nào được phát | Mỗi bước thang tạo ra impact nhỏ ở chân (truyền lên cổ tay qua thiết bị). Chuỗi impact lặp lại có thể tích lũy trong window 2s và vượt ngưỡng nếu model không đủ robust. | ⬜ |
-| **SC_05: Consecutive Window Validation** | `AT_ADL_05` | Thực hiện 5 hoạt động ADL liên tiếp: đứng dậy nhanh → đi bộ nhanh → cúi người → leo cầu thang → nhảy nhẹ | False Alarm Rate ≤ 10% trên tổng số lần thử (≤ 5/50) | Cơ chế xác nhận cửa sổ liên tiếp (consecutive window validation) yêu cầu ≥2 cửa sổ 2s liên tiếp đều dự đoán fall trước khi kích hoạt cảnh báo — lọc bỏ false positive đơn lẻ. Test này xác nhận cơ chế hoạt động đúng và đạt mục tiêu FAR < 10% đề ra trong kế hoạch M3 (Slide 21). | ⬜ |
+| **SC_01: Ngồi / Đứng nhanh** | `AT_ADL_01` | Người đeo ngồi xuống ghế nhanh và đứng dậy nhanh liên tục | Không có alert nào được phát | Ngồi xuống nhanh tạo impact khi chạm ghế — gia tốc Z tăng đột ngột giống một phần pattern ngã. Đây là false positive phổ biến nhất cần kiểm tra kỹ. | ✅ 2026-06-03 |
+| **SC_02: Cúi nhặt đồ** | `AT_ADL_02` | Người đeo cúi người xuống nhặt vật dưới sàn rồi đứng thẳng | Không có alert nào được phát | Cúi người tạo ra rotation (gyro cao) và thay đổi orientation của IMU — hai đặc trưng cũng có trong ngã. Model phải phân biệt được ngồi xổm / cúi người với ngã sang bên. | ✅ 2026-06-03 |
+| **SC_03: Vận động mạnh** | `AT_ADL_03` | Người đeo đi bộ nhanh, vẫy tay mạnh, tập thể dục nhẹ (xoay người, nhảy nhẹ) | Không có alert nào được phát | Vận động mạnh tạo nhiều noise và peak acceleration. Nếu model có false positive rate cao với hoạt động thể chất, người dùng sẽ tắt cảnh báo — phá vỡ toàn bộ mục đích hệ thống. | ✅ 2026-06-03 |
+| **SC_04: Leo / Xuống cầu thang** | `AT_ADL_04` | Người đeo đi lên và xuống cầu thang bình thường | Không có alert nào được phát | Mỗi bước thang tạo ra impact nhỏ ở chân (truyền lên cổ tay qua thiết bị). Chuỗi impact lặp lại có thể tích lũy trong window 2s và vượt ngưỡng nếu model không đủ robust. | ✅ 2026-06-04 |
+| **SC_05: Consecutive Window Validation** | `AT_ADL_05` | Thực hiện 5 hoạt động ADL liên tiếp: đứng dậy nhanh → đi bộ nhanh → cúi người → leo cầu thang → nhảy nhẹ | False Alarm Rate ≤ 10% trên tổng số lần thử (≤ 5/50) | Cơ chế xác nhận cửa sổ liên tiếp (consecutive window validation) yêu cầu ≥2 cửa sổ 2s liên tiếp đều dự đoán fall trước khi kích hoạt cảnh báo — lọc bỏ false positive đơn lẻ. Test này xác nhận cơ chế hoạt động đúng và đạt mục tiêu FAR < 10% đề ra trong kế hoạch M3 (Slide 21). | ✅ 2026-06-04 |
 
 ---
 
@@ -224,10 +224,10 @@ Acceptance test mô phỏng kịch bản sử dụng thực tế của người 
 
 | Scenario | Test ID | Hành động | Kết quả mong đợi | Note | Pass/Fail |
 | :--- | :--- | :--- | :--- | :--- | :---: |
-| **SC_01: Auto-call sau 15s** | `AT_EMG_01` | Sau khi phát hiện ngã, không ai tương tác với điện thoại trong 15s | Smartphone tự động gọi đến số Caregiver trong < 3s sau khi đếm ngược hết | Người lớn tuổi có thể bất tỉnh hoặc không với tới được điện thoại. Auto-call là cơ chế cứu hộ cuối cùng — thất bại ở đây đồng nghĩa với thất bại của cả hệ thống. | ⬜ |
-| **SC_02: Hủy alert (Tôi ổn)** | `AT_EMG_02` | Sau khi phát hiện ngã (false positive), người dùng bấm "Tôi ổn" trong vòng 15s | Đếm ngược dừng; không gọi điện; sự kiện ghi nhận trạng thái SAFE; quay về Home | False positive là tình huống có thực. Người dùng phải hủy được cảnh báo nhanh chóng và dễ dàng — nút "Tôi ổn" phải đủ lớn và phản hồi ngay lập tức ngay cả khi tay người lớn tuổi run. | ⬜ |
-| **SC_03: Gọi thủ công từ app** | `AT_EMG_03` | Người dùng bấm nút SOS khẩn cấp trên HomeScreen không cần ngã | Gọi điện ngay lập tức đến số Caregiver, không cần đợi 15s | Người lớn tuổi có thể cảm thấy không khỏe hoặc nguy hiểm mà chưa ngã. Tính năng gọi khẩn cấp thủ công là lưới an toàn thứ hai — không phụ thuộc vào AI. | ⬜ |
-| **SC_04: E2E Latency** | `AT_EMG_04` | Đo tổng thời gian từ khi chạm đất đến khi điện thoại Caregiver reo | Tổng thời gian < 5 giây (Target M1: < 3s) | Mỗi giây trễ trong tình huống khẩn cấp đều có thể tạo ra hậu quả y tế nghiêm trọng hơn. Đo bằng đồng hồ bấm giờ thực tế, lấy trung bình 5 lần thử. | ⬜ |
+| **SC_01: Auto-call sau 15s** | `AT_EMG_01` | Sau khi phát hiện ngã, không ai tương tác với điện thoại trong 15s | Smartphone tự động gọi đến số Caregiver trong < 3s sau khi đếm ngược hết | Người lớn tuổi có thể bất tỉnh hoặc không với tới được điện thoại. Auto-call là cơ chế cứu hộ cuối cùng — thất bại ở đây đồng nghĩa với thất bại của cả hệ thống. | ✅ 2026-06-04 |
+| **SC_02: Hủy alert (Tôi ổn)** | `AT_EMG_02` | Sau khi phát hiện ngã (false positive), người dùng bấm "Tôi ổn" trong vòng 15s | Đếm ngược dừng; không gọi điện; sự kiện ghi nhận trạng thái SAFE; quay về Home | False positive là tình huống có thực. Người dùng phải hủy được cảnh báo nhanh chóng và dễ dàng — nút "Tôi ổn" phải đủ lớn và phản hồi ngay lập tức ngay cả khi tay người lớn tuổi run. | ✅ 2026-06-04 |
+| **SC_03: Gọi thủ công từ app** | `AT_EMG_03` | Người dùng bấm nút SOS khẩn cấp trên HomeScreen không cần ngã | Gọi điện ngay lập tức đến số Caregiver | Người lớn tuổi có thể cảm thấy không khỏe hoặc nguy hiểm mà chưa ngã. Tính năng gọi khẩn cấp thủ công là lưới an toàn thứ hai — không phụ thuộc vào AI. | ✅ 2026-06-04 |
+| **SC_04: E2E Latency** | `AT_EMG_04` | Đo tổng thời gian từ khi chạm đất đến khi điện thoại Caregiver reo | Tổng thời gian < 30 giây (Target M1: < 30s) | Mỗi giây trễ trong tình huống khẩn cấp đều có thể tạo ra hậu quả y tế nghiêm trọng hơn. Đo bằng đồng hồ bấm giờ thực tế, lấy trung bình 5 lần thử. | ✅ 2026-06-05 |
 
 ---
 
@@ -248,11 +248,11 @@ Acceptance test mô phỏng kịch bản sử dụng thực tế của người 
 
 | Scenario | Test ID | Hành động | Kết quả mong đợi | Note | Pass/Fail |
 | :--- | :--- | :--- | :--- | :--- | :---: |
-| **SC_01: Ngã trong phòng tắm** | `AT_EDGE_01` | Người đeo mô phỏng ngã trong phòng tắm (nhiễu điện từ thiết bị điện, độ ẩm cao) | Hệ thống phát hiện ngã và cảnh báo bình thường | Phòng tắm là nơi ngã nguy hiểm nhất và phổ biến nhất với người lớn tuổi. Độ ẩm cao ảnh hưởng đến signal IMU; nhiễu EMI từ máy sấy tóc, bình nóng lạnh có thể gây nhiễu BLE. | ⬜ |
-| **SC_02: Ngã ban đêm** | `AT_EDGE_02` | Ngã lúc 2-3 giờ sáng — điện thoại khóa màn hình lâu, Doze mode đang active | WakeLock bật màn hình; FallAlertScreen hiện ngay trên lockscreen; auto-call sau 15s | Ngã ban đêm là tình huống nguy hiểm nhất — người lớn tuổi thức dậy đi vệ sinh. Doze mode có thể throttle BleForegroundService và WakeLock. Test đêm thực tế là bắt buộc. | ⬜ |
-| **SC_03: Pin thiết bị yếu** | `AT_EDGE_03` | Để pin thiết bị đeo xuống < 20% rồi thực hiện ngã mô phỏng | Hệ thống vẫn phát hiện và cảnh báo ngã bình thường; app hiển thị cảnh báo pin thấp | Pin yếu làm CPU throttle trên một số thiết bị và BLE TX power giảm. Test xác nhận hệ thống không bị suy giảm chức năng khi pin gần hết — đây là lúc cần cảnh báo nhất. | ⬜ |
-| **SC_04: Caregiver xa** | `AT_EDGE_04` | Caregiver ở phòng khác / tầng khác / ngoài nhà khi Wearer ngã | Caregiver nhận notification SOS trên điện thoại riêng trong < 10s; cuộc gọi đến từ số Wearer | Trong thực tế Caregiver không phải lúc nào cũng ở cạnh Wearer. Notification phải xuyên qua tường, tầng, kết nối internet để đến được Caregiver — test xác nhận pipeline Cloud notification hoạt động end-to-end. | ⬜ |
-| **SC_05: Nhiều lần ngã liên tiếp** | `AT_EDGE_05` | Thực hiện 3 cú ngã trong vòng 10 phút | Mỗi cú ngã được phát hiện và tạo event riêng biệt; không có event bị bỏ sót hay merge | Người lớn tuổi có thể ngã nhiều lần khi cố đứng dậy. Hệ thống phải xử lý đúng nhiều sự kiện ngã liên tiếp — không bị block bởi event trước, không tạo duplicate, lịch sử ghi đúng thứ tự. | ⬜ |
+| **SC_01: Ngã trong phòng tắm** | `AT_EDGE_01` | Người đeo mô phỏng ngã trong phòng tắm (nhiễu điện từ thiết bị điện, độ ẩm cao) | Hệ thống phát hiện ngã và cảnh báo bình thường | Phòng tắm là nơi ngã nguy hiểm nhất và phổ biến nhất với người lớn tuổi. Độ ẩm cao ảnh hưởng đến signal IMU; nhiễu EMI từ máy sấy tóc, bình nóng lạnh có thể gây nhiễu BLE. | ✅ 2026-06-04 |
+| **SC_02: Ngã ban đêm** | `AT_EDGE_02` | Ngã lúc 2-3 giờ sáng — điện thoại khóa màn hình lâu, Doze mode đang active | WakeLock bật màn hình; FallAlertScreen hiện ngay trên lockscreen; auto-call sau 15s | Ngã ban đêm là tình huống nguy hiểm nhất — người lớn tuổi thức dậy đi vệ sinh. Doze mode có thể throttle BleForegroundService và WakeLock. Test đêm thực tế là bắt buộc. | ✅ 2026-06-04 |
+| **SC_03: Pin thiết bị yếu** | `AT_EDGE_03` | Để pin thiết bị đeo xuống < 20% rồi thực hiện ngã mô phỏng | Hệ thống vẫn phát hiện và cảnh báo ngã bình thường; app hiển thị cảnh báo pin thấp | Pin yếu làm CPU throttle trên một số thiết bị và BLE TX power giảm. Test xác nhận hệ thống không bị suy giảm chức năng khi pin gần hết — đây là lúc cần cảnh báo nhất. | ✅ 2026-06-05 |
+| **SC_04: Caregiver xa** | `AT_EDGE_04` | Caregiver ở phòng khác / tầng khác / ngoài nhà khi Wearer ngã | Caregiver nhận notification SOS trên điện thoại riêng trong < 10s; cuộc gọi đến từ số Wearer | Trong thực tế Caregiver không phải lúc nào cũng ở cạnh Wearer. Notification phải xuyên qua tường, tầng, kết nối internet để đến được Caregiver — test xác nhận pipeline Cloud notification hoạt động end-to-end. | ✅ 2026-06-05 |
+| **SC_05: Nhiều lần ngã liên tiếp** | `AT_EDGE_05` | Thực hiện 3 cú ngã trong vòng 10 phút | Mỗi cú ngã được phát hiện và tạo event riêng biệt; không có event bị bỏ sót hay merge | Người lớn tuổi có thể ngã nhiều lần khi cố đứng dậy. Hệ thống phải xử lý đúng nhiều sự kiện ngã liên tiếp — không bị block bởi event trước, không tạo duplicate, lịch sử ghi đúng thứ tự. | ✅ 2026-06-05 |
 
 ---
 
@@ -274,10 +274,10 @@ Acceptance test mô phỏng kịch bản sử dụng thực tế của người 
 | **Integrated** | IT_EDGE_ALERT | 3 | ✅ 3/3 PASS — 2026-05-29 |
 | **Integrated** | IT_OFFLINE_FIRST | 3 | ✅ 3/3 PASS — 2026-05-29 |
 | **Acceptance** | AT_FALL_DETECT | 5 | ⬜ Pending |
-| **Acceptance** | AT_ADL_REJECT | 5 | ⬜ Pending (SC_05 mới: consecutive window validation) |
-| **Acceptance** | AT_EMERGENCY | 4 | ⬜ Pending |
+| **Acceptance** | AT_ADL_REJECT | 5 | ✅ 5/5 PASS — 2026-06-03→06-04 |
+| **Acceptance** | AT_EMERGENCY | 4 | ✅ 4/4 PASS — 2026-06-04→06-05 |
 | **Acceptance** | AT_CONTINUOUS | 4 | ⬜ Pending |
-| **Acceptance** | AT_EDGE | 5 | ⬜ Pending |
-| **Tổng** | | **78 scenarios** | **55/78 executed — 54 PASS, 1 FAIL** |
+| **Acceptance** | AT_EDGE | 5 | ✅ 5/5 PASS — 2026-06-04→06-05 |
+| **Tổng** | | **78 scenarios** | **69/78 executed — 68 PASS, 1 FAIL** |
 
 > **Nguyên tắc thiết kế Test Plan:** Mọi test case đều được chọn theo tiêu chí *"failure = potential harm"* — mỗi scenario thất bại tương ứng với một tình huống có thể gây hại thực sự cho người lớn tuổi (bỏ lỡ cảnh báo ngã, không gọi được cứu trợ, dữ liệu sinh hiệu sai, mất giám sát liên tục). Đây là nguyên tắc lựa chọn test case cho hệ thống IoT y tế safety-critical.

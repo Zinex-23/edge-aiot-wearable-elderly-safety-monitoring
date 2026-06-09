@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Full-bleed icon: artwork fills the whole icon as the background layer so the
+         launcher's mask crops it edge-to-edge with no white frame. Foreground is empty. -->
+    <background android:drawable="@drawable/ic_launcher_fg" />
+    <foreground android:drawable="@android:color/transparent" />
+</adaptive-icon>

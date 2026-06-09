@@ -379,7 +379,7 @@ class BleForegroundService : Service() {
             // Standard monitoring channel
             val monitorChannel = NotificationChannel(
                 NOTIFICATION_CHANNEL_ID,
-                "AIFD Theo dõi an toàn",
+                "CareLink Theo dõi an toàn",
                 NotificationManager.IMPORTANCE_LOW
             )
             nm.createNotificationChannel(monitorChannel)
@@ -414,7 +414,7 @@ class BleForegroundService : Service() {
         )
 
         val title = if (connected) "Đang theo dõi an toàn" else "Chờ kết nối thiết bị..."
-        val text = if (connected && deviceName != null) "Thiết bị: $deviceName" else "AIFD chạy nền"
+        val text = if (connected && deviceName != null) "Thiết bị: $deviceName" else "CareLink chạy nền"
 
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle(title)

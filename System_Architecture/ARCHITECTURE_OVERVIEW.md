@@ -19,9 +19,9 @@ graph TD
     end
 
     subgraph "3. Optional Cloud Layer (History & Trend)"
-        D -. "WiFi/4G (When Online)" .-> G[ThingsBoard IoT Platform]
-        G --> H[(MongoDB Database)]
-        G --> I[Web Dashboard - History View]
+        D -. "WiFi/4G (When Online) · HTTP/JSON" .-> G[Flask REST API - Render]
+        G --> H[(MongoDB Atlas)]
+        G -. "FCM Push" .-> I[Caregiver / Web History View]
     end
 
     F ==> J[Caregiver / Relatives]
@@ -38,7 +38,7 @@ graph TD
 
 ### 2. Luồng Đồng Bộ Dữ Liệu (Đồng bộ sau - Async)
 *   **Cơ chế**: Dữ liệu sinh tồn và lịch sử té ngã được lưu tạm (Cache) trên Ứng dụng Android.
-*   **Đồng bộ**: Khi điện thoại có kết nối Internet (Wi-Fi/4G), ứng dụng sẽ tự động đẩy dữ liệu lên **ThingsBoard** và lưu vào **MongoDB**.
+*   **Đồng bộ**: Khi điện thoại có kết nối Internet (Wi-Fi/4G), ứng dụng tự động gửi dữ liệu (HTTP/JSON) lên **API Flask** và lưu vào **MongoDB Atlas**. *(Hệ thống không dùng ThingsBoard/MQTT.)*
 *   **Mục đích**: Lưu trữ dữ liệu lịch sử bền vững và phân tích xu hướng sức khỏe lâu dài.
 
 ### 3. Tầng Ứng Dụng & Xem Lịch Sử

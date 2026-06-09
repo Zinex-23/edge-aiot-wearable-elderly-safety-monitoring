@@ -21,6 +21,6 @@ Tài liệu này chi tiết các thông số kỹ thuật của lớp xử lý b
 
 ## 3. Logic Xử lý Biên
 
-- **Cửa sổ trượt (Sliding Window)**: 100 mẫu, dịch chuyển 50 mẫu (Overlap 50%).
+- **Cửa sổ trượt (Sliding Window)**: 100 mẫu (2 giây), dịch chuyển 100 mẫu — **KHÔNG có overlap** (`kInferenceStride = 100`; mỗi cửa sổ 2 s liền kề, suy luận 1 lần / 2 s).
 - **Tiền xử lý**: Chuẩn hóa Z-score (Mean/Std) thích ứng ngay trên chip.
 - **Thời gian suy luận**: < 20ms thực hiện trên ESP32-S3.

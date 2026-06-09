@@ -5,7 +5,7 @@
  *
  * Features:
  *   - Real BMI160 fall detection pipeline (same as S3_BLE production):
- *       candidate gate → activity gate (3 windows) → TFLite V84 → impact check → FALL_WATCH → STILL_TIMING
+ *       candidate gate → activity gate (2 windows) → TFLite V84 → impact check → FALL_WATCH → STILL_TIMING
  *   - Confirmed fall → ALERT packet via BLE
  *   - Button press during fall alert → SAFE packet via BLE (replaces app countdown dismiss)
  *   - Simulated HR (60–100 bpm) and SpO2 (94–100%) — BATCH packet every 25 s
@@ -83,11 +83,11 @@ static const int      kTensorArenaSize  = 60 * 1024;
 static const float FALL_DECISION_THRESHOLD  = 0.42f;
 static const float CANDIDATE_ACC_THRESHOLD  = 7.5f;
 static const float CANDIDATE_GYRO_THRESHOLD = 240.0f;
-static const float ACTIVITY_ACC_THRESHOLD   = 2.0f;   // gate bình thường (3 windows tích lũy)
+static const float ACTIVITY_ACC_THRESHOLD   = 2.0f;   // gate bình thường (2 windows tích lũy)
 static const float ACTIVITY_GYRO_THRESHOLD  = 50.0f;  // gate bình thường
 static const float CANCEL_ACC_THRESHOLD     = 3.5f;   // ngưỡng huỷ FALL_WATCH/STILL_TIMING
 static const float CANCEL_GYRO_THRESHOLD    = 150.0f; // cao hơn để tránh huỷ do phản xạ ngã
-static const int   ACTIVITY_WINDOW_COUNT    = 3;
+static const int   ACTIVITY_WINDOW_COUNT    = 1;
 static const float FALL_IMPACT_GYRO_MIN     = 20.0f;
 static const float HIGH_IMPACT_ACC_MIN      = 2.0f;   // at least 1 window must have peak > this
 static const float HIGH_IMPACT_GYRO_MIN     = 300.0f; // AND peak > this (confirms violent fall event)
@@ -252,6 +252,11 @@ static volatile float    gLastPeakAcc  = 0.0f;   // g
 static volatile float    gLastPeakGyro = 0.0f;   // dps
 static volatile bool     gLastActive   = false;  // true if peak crossed activity threshold
 
+// True once the wearer has been ACTIVE for >= ACTIVITY_WINDOW_COUNT windows.
+// Gates the idle status LED: while the wearer is still (chưa vào trạng thái hoạt
+// động), the ADVERTISING/CONNECTED indicator stays OFF instead of glowing.
+static volatile bool     gWearerActive = false;
+
 // =====================================================================
 // RGB LED (WS2812) + BUZZER HELPERS
 // setBrightness(50) ≈ 20 % — keeps current within GPIO 12 mA drive limit
@@ -276,9 +281,10 @@ static void applyLedState(LedState st) {
     blinkLastMs = millis();
     switch (st) {
         case LED_BOOT:        ledSet(CLR_BLUE);   buzzerOff(); break;
-        case LED_ADVERTISING:
-        case LED_WARNING:     ledSet(CLR_YELLOW); buzzerOff(); break;
-        case LED_CONNECTED:   ledSet(CLR_GREEN);  buzzerOff(); break;
+        // Idle indicator: chỉ sáng khi người đeo đã vào trạng thái hoạt động (>=2 window).
+        case LED_ADVERTISING: ledSet(gWearerActive ? CLR_YELLOW : CLR_OFF); buzzerOff(); break;
+        case LED_CONNECTED:   ledSet(gWearerActive ? CLR_GREEN  : CLR_OFF); buzzerOff(); break;
+        case LED_WARNING:     ledSet(CLR_YELLOW); buzzerOff(); break;  // lỗi/mất kết nối — luôn báo
         case LED_FALL_WATCH:  ledSet(CLR_RED);    buzzerOff(); break;
         case LED_ALARM:       ledSet(CLR_RED);    buzzerOn();  break;
     }
@@ -295,6 +301,18 @@ static void setLedState(LedState next) {
 
 static void handleBlink() {
     LedState st = gLedState;
+
+    // CONNECTED là màu tĩnh (không nhấp nháy) → re-render khi trạng thái hoạt động
+    // của người đeo thay đổi (xanh khi active, tắt khi chưa active). Chỉ ghi khi đổi.
+    if (st == LED_CONNECTED) {
+        static bool lastActiveRendered = !gWearerActive;  // ép render lần đầu
+        if (gWearerActive != lastActiveRendered) {
+            lastActiveRendered = gWearerActive;
+            ledSet(gWearerActive ? CLR_GREEN : CLR_OFF);
+        }
+        return;
+    }
+
     unsigned long interval;
     switch (st) {
         case LED_BOOT:
@@ -310,7 +328,8 @@ static void handleBlink() {
     blinkLevel  = !blinkLevel;
     switch (st) {
         case LED_BOOT:        ledSet(blinkLevel ? CLR_BLUE   : CLR_OFF); break;
-        case LED_ADVERTISING:
+        // Idle indicator: chỉ nhấp nháy vàng khi người đeo đã hoạt động; chưa thì tắt.
+        case LED_ADVERTISING: ledSet((blinkLevel && gWearerActive) ? CLR_YELLOW : CLR_OFF); break;
         case LED_WARNING:     ledSet(blinkLevel ? CLR_YELLOW : CLR_OFF); break;
         case LED_FALL_WATCH:
         case LED_ALARM:       ledSet(blinkLevel ? CLR_RED    : CLR_OFF); break;
@@ -602,6 +621,10 @@ static bool runInferenceOnSnapshot(const ImuSample *snap,
             highImpactSeen  = false;
         }
     }
+
+    // Người đeo "vào trạng thái hoạt động" khi đã tích lũy đủ ACTIVITY_WINDOW_COUNT (2)
+    // window active. Cờ này gate LED nền (ADVERTISING/CONNECTED) — chưa đủ thì LED tắt.
+    gWearerActive = (activityCount >= ACTIVITY_WINDOW_COUNT);
 
     Serial.printf("[GATE] acc=%.2fg gyro=%.1fdps  cand=%s  activity=%d/%d  highImpact=%s\n",
                   maxAcc, maxGyr,

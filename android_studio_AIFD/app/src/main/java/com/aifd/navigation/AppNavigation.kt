@@ -238,42 +238,35 @@ fun AppNavigation(
                 val fromIdx = bottomNavRoutes.indexOf(initialState.destination.route)
                 val toIdx   = bottomNavRoutes.indexOf(targetState.destination.route)
                 when {
-                    fromIdx >= 0 && toIdx >= 0 -> {
-                        val dir = if (toIdx > fromIdx) AnimatedContentTransitionScope.SlideDirection.Left
-                                  else AnimatedContentTransitionScope.SlideDirection.Right
-                        slideIntoContainer(dir, tween(280)) + fadeIn(tween(200))
-                    }
+                    // Tab-to-tab: fade only — rendering two full screens side-by-side
+                    // during a slide is too heavy for mid-range GPUs (Samsung M20).
+                    fromIdx >= 0 && toIdx >= 0 -> fadeIn(tween(180))
                     toIdx < 0 ->
-                        slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Up, tween(320)) +
+                        slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Up, tween(280)) +
                         fadeIn(tween(200))
-                    else -> fadeIn(tween(250))
+                    else -> fadeIn(tween(200))
                 }
             },
             exitTransition = {
                 val fromIdx = bottomNavRoutes.indexOf(initialState.destination.route)
                 val toIdx   = bottomNavRoutes.indexOf(targetState.destination.route)
                 when {
-                    fromIdx >= 0 && toIdx >= 0 -> {
-                        val dir = if (toIdx > fromIdx) AnimatedContentTransitionScope.SlideDirection.Left
-                                  else AnimatedContentTransitionScope.SlideDirection.Right
-                        slideOutOfContainer(dir, tween(280)) + fadeOut(tween(200))
-                    }
-                    toIdx < 0 -> fadeOut(tween(200))
-                    else -> fadeOut(tween(250))
+                    fromIdx >= 0 && toIdx >= 0 -> fadeOut(tween(130))
+                    toIdx < 0 -> fadeOut(tween(160))
+                    else -> fadeOut(tween(200))
                 }
             },
             popEnterTransition = {
                 val fromIdx = bottomNavRoutes.indexOf(initialState.destination.route)
-                if (fromIdx < 0) fadeIn(tween(280)) else fadeIn(tween(250))
+                if (fromIdx < 0) fadeIn(tween(250)) else fadeIn(tween(200))
             },
             popExitTransition = {
                 val fromIdx = bottomNavRoutes.indexOf(initialState.destination.route)
                 if (fromIdx < 0) {
-                    slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Down, tween(320)) +
-                    fadeOut(tween(200))
+                    slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Down, tween(280)) +
+                    fadeOut(tween(180))
                 } else {
-                    slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(280)) +
-                    fadeOut(tween(200))
+                    fadeOut(tween(150))
                 }
             }
         ) {

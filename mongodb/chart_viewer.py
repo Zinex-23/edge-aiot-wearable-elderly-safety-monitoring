@@ -4,9 +4,10 @@ Chạy:  python chart_viewer.py
 Mở:    http://localhost:3000
 """
 
-from flask import Flask, jsonify, render_template_string, request
+from flask import Flask, jsonify, render_template_string, request, send_from_directory
 from pymongo import MongoClient, ASCENDING, DESCENDING
 from datetime import datetime, timezone, timedelta
+import os
 
 app = Flask(__name__)
 
@@ -104,6 +105,10 @@ def make_stats(vals: list) -> dict:
 def api_users():
     users = col.distinct("userId")
     return jsonify({"users": users})
+
+@app.route("/logo.png")
+def serve_logo():
+    return send_from_directory(os.path.dirname(os.path.abspath(__file__)), "png-transparent-mongodb-plain-wordmark-logo-icon.png")
 
 
 # ─── API: vitals data ─────────────────────────────────────────────────────────
@@ -407,7 +412,7 @@ body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFo
 <body>
 
 <div class="header">
-  <h1>❤️ AIFD Vitals Viewer</h1>
+  <h1><img src="/logo.png" alt="MongoDB Logo" style="height: 30px; margin-right: 8px; vertical-align: middle;"> AIFD Vitals Viewer</h1>
   <select class="user-select" id="userSel" onchange="onUser()"></select>
 </div>
 

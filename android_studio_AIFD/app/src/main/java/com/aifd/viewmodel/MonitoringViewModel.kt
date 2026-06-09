@@ -640,22 +640,25 @@ class MonitoringViewModel(application: Application) : AndroidViewModel(applicati
             while (true) {
                 delay(1_000)
                 if (currentUserId == "000") continue
-                _uiState.update { state ->
-                    val isHR = state.activeTab == MetricTab.HEART_RATE
-                    // Ưu tiên cloud data; fallback về vitalsStore khi cloud chưa có
-                    val updatedChart = when (state.timeRange) {
-                        TimeRange.LIVE -> emptyList()
-                        TimeRange.ONE_HOUR -> {
-                            val cloud = if (isHR) cloud1hHr else cloud1hSpo2
-                            cloud.ifEmpty { vitalsStore.get1hChart(isHR) }
-                        }
-                        TimeRange.TWENTY_FOUR_HOURS -> {
-                            val cloud = if (isHR) cloud24hHr else cloud24hSpo2
-                            cloud.ifEmpty { vitalsStore.get24hChart(isHR) }
-                        }
+                val state = _uiState.value
+                // LIVE mode has no chart to tick — skip to avoid 1 Hz allocation churn
+                // that causes GC pressure and main-thread stalls during navigation.
+                if (state.timeRange == TimeRange.LIVE) continue
+                val isHR = state.activeTab == MetricTab.HEART_RATE
+                val updatedChart = when (state.timeRange) {
+                    TimeRange.ONE_HOUR -> {
+                        val cloud = if (isHR) cloud1hHr else cloud1hSpo2
+                        cloud.ifEmpty { vitalsStore.get1hChart(isHR) }
                     }
-                    state.copy(chartData = updatedChart)
+                    TimeRange.TWENTY_FOUR_HOURS -> {
+                        val cloud = if (isHR) cloud24hHr else cloud24hSpo2
+                        cloud.ifEmpty { vitalsStore.get24hChart(isHR) }
+                    }
+                    else -> continue
                 }
+                // Only emit if chart data actually changed — avoids recomposition when unchanged
+                if (updatedChart == state.chartData) continue
+                _uiState.update { it.copy(chartData = updatedChart) }
             }
         }
     }

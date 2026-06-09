@@ -110,7 +110,7 @@ class DeviceViewModel(application: Application) : AndroidViewModel(application) 
                         val newDevice = DeviceInfo(
                             id = state.deviceAddress,
                             name = state.deviceName,
-                            battery = 100,
+                            battery = 87,
                             signalStrength = -60,
                             connectionStatus = ConnectionStatus.CONNECTED
                         )

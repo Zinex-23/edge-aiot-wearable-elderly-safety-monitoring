@@ -18,7 +18,7 @@ class AppStrings(private val currentLanguage: AppLanguage) {
     private val vi = currentLanguage == AppLanguage.VIETNAMESE
     val locale: Locale = if (vi) Locale("vi") else Locale.US
 
-    val appName get() = "AIFD"
+    val appName get() = "CareLink"
     val home get() = if (vi) "Trang chủ" else "Home"
     val health get() = if (vi) "Sức khỏe" else "Health"
     val alerts get() = if (vi) "Cảnh báo" else "Alerts"
