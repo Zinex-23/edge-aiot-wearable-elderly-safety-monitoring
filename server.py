@@ -5,6 +5,8 @@ from flask import Flask, request, jsonify, Response, stream_with_context
 from pymongo import MongoClient, DESCENDING
 import json
 import time
+import random
+import requests
 
 try:
     import firebase_admin
@@ -155,6 +157,431 @@ def get_history(limit=100):
 @app.route("/", methods=["GET"])
 def dashboard():
     return jsonify({"ok": True, "service": "AIFD Cloud API", "version": "2.0"}), 200
+
+
+# =========================
+# CONTROL PANEL & API
+# =========================
+@app.route("/control", methods=["GET"])
+def control_page():
+    html_content = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hospicare Device Control</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #6366f1;
+            --primary-glow: rgba(99, 102, 241, 0.5);
+            --secondary: #a855f7;
+            --success: #10b981;
+            --error: #ef4444;
+            --bg-dark: #09090b;
+            --card-bg: rgba(255, 255, 255, 0.03);
+            --card-border: rgba(255, 255, 255, 0.08);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-dark);
+            background-image: 
+                radial-gradient(circle at 20% 30%, rgba(99, 102, 241, 0.15) 0%, transparent 40%),
+                radial-gradient(circle at 80% 70%, rgba(168, 85, 247, 0.15) 0%, transparent 40%),
+                radial-gradient(circle at 50% 50%, #0f0c1b 0%, #09090b 100%);
+            color: #f4f4f5;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+        }
+
+        /* Decorative Background Elements */
+        .glowing-blob {
+            position: absolute;
+            width: 300px;
+            height: 300px;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            border-radius: 50%;
+            filter: blur(120px);
+            opacity: 0.3;
+            z-index: 0;
+            pointer-events: none;
+            animation: float 10s ease-in-out infinite alternate;
+        }
+        
+        .blob-1 { top: 15%; left: 15%; }
+        .blob-2 { bottom: 15%; right: 15%; animation-delay: -5s; }
+
+        @keyframes float {
+            0% { transform: translate(0, 0) scale(1); }
+            100% { transform: translate(30px, -20px) scale(1.1); }
+        }
+
+        .control-container {
+            position: relative;
+            z-index: 10;
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            padding: 40px;
+            border-radius: 28px;
+            width: 90%;
+            max-width: 440px;
+            text-align: center;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+            animation: fadeIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .header h1 {
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+            margin-bottom: 8px;
+            background: linear-gradient(135deg, #ffffff 0%, #a1a1aa 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .header p {
+            font-size: 14px;
+            color: #a1a1aa;
+            margin-bottom: 40px;
+        }
+
+        /* Pulsing Glow Button */
+        .btn-wrapper {
+            position: relative;
+            display: inline-block;
+            margin: 20px auto;
+        }
+
+        .control-btn {
+            width: 150px;
+            height: 150px;
+            border-radius: 50%;
+            border: none;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+            color: white;
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            outline: none;
+            position: relative;
+            z-index: 2;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            box-shadow: 0 10px 30px var(--primary-glow);
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        .control-btn::after {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+            z-index: -1;
+            opacity: 0.8;
+            transition: all 0.4s ease;
+        }
+
+        .control-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 15px 40px rgba(99, 102, 241, 0.7);
+        }
+
+        .control-btn:hover::after {
+            transform: scale(1.2);
+            opacity: 0;
+        }
+
+        .control-btn:active {
+            transform: scale(0.95);
+            box-shadow: 0 5px 15px var(--primary-glow);
+        }
+
+        /* Pulse icon */
+        .btn-icon {
+            font-size: 32px;
+            margin-bottom: 8px;
+            animation: pulse-icon 2s infinite;
+        }
+
+        @keyframes pulse-icon {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+
+        /* Pulsing background ripple for active/idle status */
+        .ripple {
+            position: absolute;
+            top: 50%; left: 50%;
+            width: 150px; height: 150px;
+            margin-left: -75px; margin-top: -75px;
+            border-radius: 50%;
+            background: var(--primary);
+            opacity: 0;
+            z-index: 1;
+            pointer-events: none;
+        }
+
+        .ripple-active {
+            animation: ripple-effect 1.5s cubic-bezier(0.1, 0.8, 0.3, 1) infinite;
+        }
+
+        @keyframes ripple-effect {
+            0% { transform: scale(1); opacity: 0.4; }
+            100% { transform: scale(1.6); opacity: 0; }
+        }
+
+        /* Status & Feedback Panel */
+        .status-panel {
+            margin-top: 40px;
+            padding: 16px;
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            transition: all 0.3s ease;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            background: rgba(99, 102, 241, 0.1);
+            color: #818cf8;
+            border: 1px solid rgba(99, 102, 241, 0.2);
+            transition: all 0.3s ease;
+        }
+
+        .status-badge.sending {
+            background: rgba(245, 158, 11, 0.1);
+            color: #fbbf24;
+            border: 1px solid rgba(245, 158, 11, 0.2);
+        }
+
+        .status-badge.success {
+            background: rgba(16, 185, 129, 0.1);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.2);
+        }
+
+        .status-badge.error {
+            background: rgba(239, 68, 68, 0.1);
+            color: #f87171;
+            border: 1px solid rgba(239, 68, 68, 0.2);
+        }
+
+        .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: currentColor;
+            margin-right: 8px;
+            display: inline-block;
+        }
+
+        .dot-pulse {
+            animation: dot-pulse 1.2s infinite ease-in-out;
+        }
+
+        @keyframes dot-pulse {
+            0%, 100% { opacity: 0.3; }
+            50% { opacity: 1; }
+        }
+
+        .info-text {
+            font-size: 14px;
+            color: #a1a1aa;
+            line-height: 1.5;
+        }
+
+        .highlight-value {
+            font-family: monospace;
+            font-size: 18px;
+            font-weight: 700;
+            color: #ffffff;
+            margin-top: 4px;
+            display: block;
+        }
+
+        /* Toast Notification */
+        .toast {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background: rgba(24, 24, 27, 0.9);
+            border: 1px solid var(--card-border);
+            padding: 12px 24px;
+            border-radius: 12px;
+            font-size: 14px;
+            z-index: 100;
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            display: flex;
+            align-items: center;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+        }
+
+        .toast.show {
+            transform: translateX(-50%) translateY(0);
+            opacity: 1;
+        }
+
+        .toast-icon {
+            margin-right: 8px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="glowing-blob blob-1"></div>
+    <div class="glowing-blob blob-2"></div>
+
+    <div class="control-container">
+        <div class="header">
+            <h1>Hospicare Control</h1>
+            <p>Send simulated metrics to Firebase RTDB</p>
+        </div>
+
+        <div class="btn-wrapper">
+            <div class="ripple ripple-active" id="btn-ripple"></div>
+            <button class="control-btn" id="send-btn">
+                <span class="btn-icon">⚡</span>
+                <span>TRIGGER</span>
+            </button>
+        </div>
+
+        <div class="status-panel">
+            <div class="status-badge" id="status-badge">
+                <span class="dot" id="status-dot"></span>
+                <span id="status-label">System Ready</span>
+            </div>
+            <div class="info-text" id="info-text">
+                Press the button above to publish a random status value to Firebase.
+                <span class="highlight-value" id="value-display">—</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast">
+        <span class="toast-icon"></span>
+        <span class="toast-msg"></span>
+    </div>
+
+    <script>
+        const sendBtn = document.getElementById('send-btn');
+        const btnRipple = document.getElementById('btn-ripple');
+        const statusBadge = document.getElementById('status-badge');
+        const statusDot = document.getElementById('status-dot');
+        const statusLabel = document.getElementById('status-label');
+        const infoText = document.getElementById('info-text');
+        const valueDisplay = document.getElementById('value-display');
+        const toast = document.getElementById('toast');
+        const toastMsg = toast.querySelector('.toast-msg');
+        const toastIcon = toast.querySelector('.toast-icon');
+
+        function showToast(message, isSuccess = true) {
+            toastMsg.textContent = message;
+            toastIcon.textContent = isSuccess ? '✅' : '❌';
+            toast.className = 'toast show';
+            setTimeout(() => {
+                toast.className = 'toast';
+            }, 3000);
+        }
+
+        sendBtn.addEventListener('click', async () => {
+            sendBtn.disabled = true;
+            statusBadge.className = 'status-badge sending';
+            statusDot.className = 'dot dot-pulse';
+            statusLabel.textContent = 'Sending...';
+            btnRipple.classList.remove('ripple-active');
+            infoText.innerHTML = 'Updating Firebase Realtime Database...';
+            
+            try {
+                const response = await fetch('/api/control', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.ok) {
+                    statusBadge.className = 'status-badge success';
+                    statusDot.className = 'dot';
+                    statusLabel.textContent = 'Success';
+                    infoText.innerHTML = `Value successfully pushed to Firebase: <span class="highlight-value">${data.value}</span>`;
+                    showToast(`Updated Firebase with status: ${data.value}`, true);
+                } else {
+                    throw new Error(data.error || 'Server error occurred');
+                }
+            } catch (error) {
+                statusBadge.className = 'status-badge error';
+                statusDot.className = 'dot';
+                statusLabel.textContent = 'Error';
+                infoText.innerHTML = `Failed to send data: <span style="color: var(--error)">${error.message}</span>`;
+                showToast(`Error: ${error.message}`, false);
+            } finally {
+                setTimeout(() => {
+                    sendBtn.disabled = false;
+                    btnRipple.classList.add('ripple-active');
+                }, 1000);
+            }
+        });
+    </script>
+</body>
+</html>"""
+    return Response(html_content, mimetype="text/html"), 200
+
+
+@app.route("/api/control", methods=["POST"])
+def api_control():
+    try:
+        # Generate a random integer status value
+        random_status = random.randint(1, 100)
+        
+        # Firebase Realtime Database status path REST URL
+        firebase_url = "https://hospicare-91930-default-rtdb.asia-southeast1.firebasedatabase.app/status.json"
+        
+        # Put request to update status node
+        response = requests.put(firebase_url, json=random_status, timeout=5)
+        
+        if response.status_code == 200:
+            return jsonify({
+                "ok": True,
+                "value": random_status
+            }), 200
+        else:
+            return jsonify({
+                "ok": False,
+                "error": f"Firebase responded with status code {response.status_code}"
+            }), 500
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 # =========================
