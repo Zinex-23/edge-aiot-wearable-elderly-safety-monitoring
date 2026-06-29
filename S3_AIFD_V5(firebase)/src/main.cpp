@@ -1,14 +1,13 @@
 /**
- * S3_AIFD_V4 — src/main.cpp
+ * S3_AIFD_V1 — src/main.cpp
  *
- * Threshold-only integration test firmware for AIFD ESP32-S3.
+ * Integration test firmware for AIFD ESP32-S3.
  *
  * Features:
- *   - Real BMI160 fall detection pipeline without TFLite:
- *       pre-activity gate → threshold peak → STILL_TIMING
+ *   - Real BMI160 fall detection pipeline (same as S3_BLE production):
+ *       candidate gate → activity gate (2 windows) → TFLite V84 → impact check → FALL_WATCH → STILL_TIMING
  *   - Confirmed fall → ALERT packet via BLE
  *   - Button press during fall alert → SAFE packet via BLE (replaces app countdown dismiss)
- *   - Button press while idle → manual ALERT packet for SOS / testing
  *   - Simulated HR (60–100 bpm) and SpO2 (94–100%) — BATCH packet every 25 s
  *   - BLE: same UUIDs and READY handshake as production protocol
  *
@@ -25,8 +24,17 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 
+#include "fall_detection_v84.h"
+#include "tensorflow/lite/micro/all_ops_resolver.h"
+#include "tensorflow/lite/micro/micro_error_reporter.h"
+#include "tensorflow/lite/micro/micro_interpreter.h"
+#include "tensorflow/lite/schema/schema_generated.h"
+
 #include <NimBLEDevice.h>
 #include <Adafruit_NeoPixel.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include <string>
 #include "MAX30105.h"
 
@@ -62,28 +70,38 @@ static const uint8_t REG_GYR_CONF  = 0x42;
 static const uint8_t REG_GYR_RANGE = 0x43;
 static const uint8_t REG_CMD       = 0x7E;
 
-static const float ACC_LSB_PER_G   = 2048.0f;  // BMI160 +/-16g range
+static const float ACC_LSB_PER_G   = 16384.0f;
 static const float GYR_LSB_PER_DPS = 16.4f;
 
 // =====================================================================
-// SAMPLING + THRESHOLD CONFIG
+// SAMPLING + MODEL CONFIG
 // =====================================================================
 static const uint32_t SAMPLE_PERIOD_MS  = 20;
 static const int      kWindowSize       = 100;
-static const int      kDetectionStride  = 100;
+static const int      kFeatureCount     = 6;
+static const int      kInferenceStride  = 100;
+static const int      kTensorArenaSize  = 60 * 1024;
 
-static const float FALL_ACC_THRESHOLD   = 5.0f;
-static const float FALL_GYRO_THRESHOLD  = 500.0f;
-static const float ACTIVITY_ACC_THRESHOLD   = 3.0f;   // pre-fall movement gate
-static const float ACTIVITY_GYRO_THRESHOLD  = 62.5f;  // pre-fall movement gate
-static const int   ACTIVITY_WINDOW_COUNT    = 2;
+// V84 optimal threshold
+static const float FALL_DECISION_THRESHOLD  = 0.42f;
+static const float CANDIDATE_ACC_THRESHOLD  = 7.5f;
+static const float CANDIDATE_GYRO_THRESHOLD = 240.0f;
+static const float ACTIVITY_ACC_THRESHOLD   = 2.0f;   // gate bình thường (2 windows tích lũy)
+static const float ACTIVITY_GYRO_THRESHOLD  = 50.0f;  // gate bình thường
+static const float CANCEL_ACC_THRESHOLD     = 3.5f;   // ngưỡng huỷ FALL_WATCH/STILL_TIMING
+static const float CANCEL_GYRO_THRESHOLD    = 150.0f; // cao hơn để tránh huỷ do phản xạ ngã
+static const int   ACTIVITY_WINDOW_COUNT    = 1;
+static const float FALL_IMPACT_GYRO_MIN     = 20.0f;
+static const float HIGH_IMPACT_ACC_MIN      = 2.0f;   // at least 1 window must have peak > this
+static const float HIGH_IMPACT_GYRO_MIN     = 300.0f; // AND peak > this (confirms violent fall event)
 static const int   STILLNESS_SAMPLES        = 25;
 static const float STILLNESS_ACC_MIN        = 0.6f;
 static const float STILLNESS_ACC_MAX        = 1.7f;
 static const float STILLNESS_GYRO_MAX       = 100.0f;
-static const uint32_t FALL_RED_DELAY_MS        = 2000;  // chỉ bật đỏ sau khi nằm im >= 2s
+static const int      FALL_WATCH_WINDOWS       = 5;
 static const uint32_t FALL_STILL_DURATION_MS   = 5000;  // cần nằm im liên tục bao lâu
 static const uint32_t FALL_MONITOR_TIMEOUT_MS  = 10000; // tối đa bao lâu để theo dõi sau fall
+static const uint32_t AI_WINDOW_DURATION_MS    = 6000;  // AI chạy tối đa 6s sau khi có peak (3 windows x 2s)
 
 // =====================================================================
 // BLE UUIDs
@@ -105,6 +123,35 @@ static bool                  gBleReady     = false;
 static uint32_t              gConnectCount        = 0;
 static volatile bool         gBleJustConnected    = false;
 static volatile bool         gBleJustDisconnected = false;
+
+// =====================================================================
+// WIFI + FIREBASE REALTIME DATABASE
+// =====================================================================
+struct WifiCredential {
+    const char *ssid;
+    const char *password;
+};
+
+static const WifiCredential WIFI_CREDENTIALS[] = {
+    {"bcabfeaChabdbada", ";;;;;;;;"},
+};
+static const size_t WIFI_CREDENTIAL_COUNT =
+    sizeof(WIFI_CREDENTIALS) / sizeof(WIFI_CREDENTIALS[0]);
+
+static const char *FIREBASE_STATUS_URL =
+    "https://hospicare-91930-default-rtdb.asia-southeast1.firebasedatabase.app/status.json";
+
+static const uint32_t WIFI_CONNECT_TIMEOUT_MS    = 15000;
+static const uint32_t WIFI_RETRY_INTERVAL_MS     = 10000;
+static const uint32_t FIREBASE_POLL_INTERVAL_MS  = 1000;
+static const uint32_t FIREBASE_HTTP_TIMEOUT_MS   = 1500;
+static const uint32_t FIREBASE_ALERT_CONFIRM_MS  = 5000;
+
+static String   gFirebaseLastStatus;
+static bool     gFirebaseHasBaseline = false;
+static uint32_t gLastWifiRetryMs     = 0;
+static size_t   gWifiCredentialIndex = 0;
+static const bool USE_MAX30102_SENSOR = false;
 
 class BleServerCb : public NimBLEServerCallbacks {
     void onConnect(NimBLEServer *s) override {
@@ -156,12 +203,12 @@ class ControlCb : public NimBLECharacteristicCallbacks {
 // LED STATE MACHINE
 // =====================================================================
 enum LedState : uint8_t {
-    LED_BOOT = 0,      // blue blink slow — device initialising
-    LED_ADVERTISING,   // yellow blink slow — BLE not connected
-    LED_CONNECTED,     // green solid — BLE active
-    LED_WARNING,       // yellow blink fast — BLE drop / sensor error
-    LED_FALL_WATCH,    // red blink slow — fall candidate, checking stillness
-    LED_ALARM          // red blink fast + buzzer — fall confirmed
+    LED_BOOT = 0,      // blue blink slow — init only
+    LED_ADVERTISING,   // yellow blink slow — WiFi/Firebase not ready
+    LED_CONNECTED,     // green solid — Firebase active/normal
+    LED_WARNING,       // yellow blink fast — WiFi/Firebase error
+    LED_FALL_WATCH,    // red blink slow — legacy fall-watch state
+    LED_ALARM          // red blink fast + buzzer — Firebase alert
 };
 static const char *LED_STATE_NAMES[] = {
     "BOOT(Blue)", "ADVERTISING(Yellow)", "CONNECTED(Green)", 
@@ -169,8 +216,6 @@ static const char *LED_STATE_NAMES[] = {
 };
 
 static volatile LedState gLedState     = LED_BOOT;
-static LedState          gPreFallLedState = LED_ADVERTISING;
-static bool              gHasPreFallLedState = false;
 static bool              blinkLevel    = true;
 static unsigned long     blinkLastMs   = 0;
 static uint32_t          gWarnExpireMs = 0; // 0 = permanent WARNING; >0 = auto-return at this ms
@@ -179,11 +224,26 @@ static uint32_t          gWarnExpireMs = 0; // 0 = permanent WARNING; >0 = auto-
 static int           btnLastReading = HIGH;
 static int           btnStable      = HIGH;
 static unsigned long btnLastChange  = 0;
+static volatile bool     gButtonPressLatched = false;
+static volatile uint32_t gButtonLastIsrUs    = 0;
+static uint32_t          gButtonLastActionMs = 0;
+static const uint32_t    BUTTON_ACTION_GUARD_MS = 300;
+
+static void IRAM_ATTR onButtonFalling() {
+    uint32_t nowUs = micros();
+    if ((uint32_t)(nowUs - gButtonLastIsrUs) >= (uint32_t)DEBOUNCE_MS * 1000UL) {
+        gButtonLastIsrUs = nowUs;
+        gButtonPressLatched = true;
+    }
+}
 
 // =====================================================================
 // FALL ALERT STATE — guards button SAFE logic
 // =====================================================================
 static volatile bool gFallAlertActive = false;
+static bool          gFirebaseRedPending = false;
+static uint32_t      gFirebaseRedStartMs = 0;
+static LedState      gLedStateBeforeRed  = LED_ADVERTISING;
 
 // Forward declaration so updateLedFromPipeline (defined in LED section) can
 // read fallDetectState (defined in fall-detect section below).
@@ -201,17 +261,28 @@ struct ImuSample {
 static ImuSample gImuWindow[kWindowSize];
 static int       gWindowHead            = 0;
 static int       gWindowCount           = 0;
-static int       gSamplesSinceDetection = 0;
+static int       gSamplesSinceInference = 0;
 
 static SemaphoreHandle_t gImuMutex      = nullptr;
-static TaskHandle_t      gDetectionTask = nullptr;
+static TaskHandle_t      gInferenceTask = nullptr;
 static ImuSample         gSnapshot[kWindowSize];
 
 // =====================================================================
-// BMI160 STATE
+// TFLITE MICRO STATE
 // =====================================================================
 static uint8_t bmi160Addr = BMI160_ADDR_LOW;
 static bool    bmiOk      = false;
+
+namespace {
+const tflite::Model*      model            = nullptr;
+tflite::ErrorReporter*    errorReporter    = nullptr;
+tflite::MicroInterpreter* interpreter      = nullptr;
+TfLiteTensor*             inputTensor      = nullptr;
+TfLiteTensor*             outputTensor     = nullptr;
+uint8_t                   tensorArena[kTensorArenaSize];
+int                       outputElementCount = 0;
+bool                      modelOk          = false;
+}
 
 // =====================================================================
 // SEQUENCE COUNTERS
@@ -221,7 +292,7 @@ static uint32_t gVitalsSeq = 0;
 static uint32_t gBmiSeq    = 0;
 
 // =====================================================================
-// LIVE BMI PEAK SNAPSHOT — written by detection task, read by loop()
+// LIVE BMI PEAK SNAPSHOT — written by inference task, read by loop()
 // (single producer / single consumer, atomic on ESP32)
 // =====================================================================
 static volatile float    gLastPeakAcc  = 0.0f;   // g
@@ -257,8 +328,9 @@ static void applyLedState(LedState st) {
     blinkLastMs = millis();
     switch (st) {
         case LED_BOOT:        ledSet(CLR_BLUE);   buzzerOff(); break;
-        case LED_ADVERTISING: ledSet(CLR_YELLOW); buzzerOff(); break;
-        case LED_CONNECTED:   ledSet(CLR_GREEN);  buzzerOff(); break;
+        // Idle indicator: chỉ sáng khi người đeo đã vào trạng thái hoạt động (>=2 window).
+        case LED_ADVERTISING: ledSet(gWearerActive ? CLR_YELLOW : CLR_OFF); buzzerOff(); break;
+        case LED_CONNECTED:   ledSet(gWearerActive ? CLR_GREEN  : CLR_OFF); buzzerOff(); break;
         case LED_WARNING:     ledSet(CLR_YELLOW); buzzerOff(); break;  // lỗi/mất kết nối — luôn báo
         case LED_FALL_WATCH:  ledSet(CLR_RED);    buzzerOff(); break;
         case LED_ALARM:       ledSet(CLR_RED);    buzzerOn();  break;
@@ -274,31 +346,32 @@ static void setLedState(LedState next) {
     applyLedState(next);
 }
 
-static void savePreFallLedState() {
-    gPreFallLedState = gLedState;
-    gHasPreFallLedState = true;
+static LedState firebaseIdleLedState() {
+    if (!gBleConnected) return LED_ADVERTISING;
+    return (WiFi.status() == WL_CONNECTED) ? LED_CONNECTED : LED_WARNING;
 }
 
-static void showPreFallLedState() {
-    setLedState(gHasPreFallLedState
-        ? gPreFallLedState
-        : (gBleConnected ? LED_CONNECTED : LED_ADVERTISING));
+static bool isFirebaseAlertMode() {
+    return gFirebaseRedPending || gFallAlertActive;
 }
 
-static void restorePreFallLedState() {
-    LedState target = gHasPreFallLedState
-        ? gPreFallLedState
-        : (gBleConnected ? LED_CONNECTED : LED_ADVERTISING);
-    gHasPreFallLedState = false;
-    setLedState(target);
+static void setFirebaseIdleLedState() {
+    if (!isFirebaseAlertMode() && fallDetectState == FDS_IDLE) {
+        setLedState(firebaseIdleLedState());
+    }
 }
 
 static void handleBlink() {
     LedState st = gLedState;
 
-    // Idle BLE indicators are always visible.
+    // CONNECTED là màu tĩnh (không nhấp nháy) → re-render khi trạng thái hoạt động
+    // của người đeo thay đổi (xanh khi active, tắt khi chưa active). Chỉ ghi khi đổi.
     if (st == LED_CONNECTED) {
-        ledSet(CLR_GREEN);
+        static bool lastActiveRendered = !gWearerActive;  // ép render lần đầu
+        if (gWearerActive != lastActiveRendered) {
+            lastActiveRendered = gWearerActive;
+            ledSet(gWearerActive ? CLR_GREEN : CLR_OFF);
+        }
         return;
     }
 
@@ -317,7 +390,8 @@ static void handleBlink() {
     blinkLevel  = !blinkLevel;
     switch (st) {
         case LED_BOOT:        ledSet(blinkLevel ? CLR_BLUE   : CLR_OFF); break;
-        case LED_ADVERTISING: ledSet(blinkLevel ? CLR_YELLOW : CLR_OFF); break;
+        // Idle indicator: chỉ nhấp nháy vàng khi người đeo đã hoạt động; chưa thì tắt.
+        case LED_ADVERTISING: ledSet((blinkLevel && gWearerActive) ? CLR_YELLOW : CLR_OFF); break;
         case LED_WARNING:     ledSet(blinkLevel ? CLR_YELLOW : CLR_OFF); break;
         case LED_FALL_WATCH:
         case LED_ALARM:       ledSet(blinkLevel ? CLR_RED    : CLR_OFF); break;
@@ -347,6 +421,211 @@ static void notifyVitals(const char *payload) {
 }
 
 // =====================================================================
+// WIFI + FIREBASE HELPERS
+// =====================================================================
+static String normalizeFirebaseValue(String payload) {
+    payload.trim();
+    if (payload == "null") return "";
+
+    if (payload.length() >= 2 && payload[0] == '"' && payload[payload.length() - 1] == '"') {
+        payload = payload.substring(1, payload.length() - 1);
+        payload.replace("\\\"", "\"");
+        payload.replace("\\\\", "\\");
+        payload.replace("\\n", "\n");
+        payload.replace("\\r", "\r");
+        payload.replace("\\t", "\t");
+    }
+    return payload;
+}
+
+static bool isFirebaseFallStatus(const String &status) {
+    String normalized = status;
+    normalized.trim();
+    normalized.toLowerCase();
+    return normalized == "fall" || normalized == "fallen" ||
+           normalized == "alarm" || normalized == "alert";
+}
+
+static bool connectWifiCredential(size_t index, uint32_t timeoutMs) {
+    const WifiCredential &wifi = WIFI_CREDENTIALS[index];
+    WiFi.disconnect(false);
+    WiFi.begin(wifi.ssid, wifi.password);
+
+    Serial.printf("[WIFI] Connecting to \"%s\"", wifi.ssid);
+    uint32_t startMs = millis();
+    while (WiFi.status() != WL_CONNECTED &&
+           (uint32_t)(millis() - startMs) < timeoutMs) {
+        Serial.print(".");
+        delay(500);
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+        gWifiCredentialIndex = index;
+        Serial.printf("\n[WIFI] Connected, IP=%s\n", WiFi.localIP().toString().c_str());
+        return true;
+    }
+
+    Serial.println("\n[WIFI] Connect timeout");
+    return false;
+}
+
+static void beginWifi() {
+    WiFi.mode(WIFI_STA);
+    // BLE + WiFi share the 2.4 GHz radio on ESP32-S3. Modem sleep must stay
+    // enabled with this Arduino core, otherwise WiFi aborts during coexistence.
+    WiFi.setSleep(true);
+
+    for (size_t i = 0; i < WIFI_CREDENTIAL_COUNT; i++) {
+        if (connectWifiCredential(i, WIFI_CONNECT_TIMEOUT_MS)) return;
+    }
+
+    Serial.println("[WIFI] All configured networks failed; will retry in loop()");
+}
+
+static void handleWifiReconnect() {
+    if (WiFi.status() == WL_CONNECTED) return;
+
+    uint32_t now = millis();
+    if ((uint32_t)(now - gLastWifiRetryMs) < WIFI_RETRY_INTERVAL_MS) return;
+    gLastWifiRetryMs = now;
+
+    gWifiCredentialIndex = (gWifiCredentialIndex + 1) % WIFI_CREDENTIAL_COUNT;
+    connectWifiCredential(gWifiCredentialIndex, WIFI_CONNECT_TIMEOUT_MS);
+}
+
+static bool fetchFirebaseStatus(String &statusOut) {
+    if (WiFi.status() != WL_CONNECTED) return false;
+
+    WiFiClientSecure client;
+    client.setInsecure();
+
+    HTTPClient https;
+    if (!https.begin(client, FIREBASE_STATUS_URL)) {
+        Serial.println("[FB] HTTPS begin failed");
+        return false;
+    }
+
+    https.setTimeout(FIREBASE_HTTP_TIMEOUT_MS);
+    int code = https.GET();
+    if (code != HTTP_CODE_OK) {
+        Serial.printf("[FB] GET status failed, code=%d\n", code);
+        https.end();
+        return false;
+    }
+
+    statusOut = normalizeFirebaseValue(https.getString());
+    https.end();
+    return true;
+}
+
+static void sendFallAlertPacket(const char *source) {
+    char buf[80];
+    uint32_t tsSec = millis() / 1000;
+    snprintf(buf, sizeof(buf),
+             "ALERT,%lu,%lu,fall,1,1.000,0.000",
+             (unsigned long)++gAlertSeq,
+             (unsigned long)tsSec);
+    notifyAlert(buf);
+
+    Serial.printf("[%s] ALERT sent: %s\n", source, buf);
+}
+
+static void beginFirebaseRedWatch(const String &oldStatus, const String &newStatus) {
+    if (!isFirebaseAlertMode()) {
+        gLedStateBeforeRed = gLedState;
+        if (gLedStateBeforeRed == LED_BOOT ||
+            gLedStateBeforeRed == LED_FALL_WATCH ||
+            gLedStateBeforeRed == LED_ALARM) {
+            gLedStateBeforeRed = firebaseIdleLedState();
+        }
+    }
+
+    gFirebaseRedPending = true;
+    gFirebaseRedStartMs = millis();
+    fallDetectState     = FDS_STILL_TIMING;
+    setLedState(LED_FALL_WATCH);
+
+    Serial.printf("[FB] status changed \"%s\" -> \"%s\"; red watch started (%lums)\n",
+                  oldStatus.c_str(), newStatus.c_str(),
+                  (unsigned long)FIREBASE_ALERT_CONFIRM_MS);
+}
+
+static void confirmFirebaseRedWatch() {
+    if (!gFirebaseRedPending) return;
+
+    gFirebaseRedPending = false;
+    gFallAlertActive    = true;
+    fallDetectState     = FDS_IDLE;
+    setLedState(LED_ALARM);
+    sendFallAlertPacket("FB");
+}
+
+static void cancelFirebaseAlertWithSafe() {
+    gFirebaseRedPending = false;
+    gFallAlertActive    = false;
+    fallDetectState     = FDS_IDLE;
+    setLedState(gLedStateBeforeRed);
+
+    char buf[64];
+    uint32_t tsSec = millis() / 1000;
+    snprintf(buf, sizeof(buf), "SAFE,%lu,%lu",
+             (unsigned long)++gAlertSeq, (unsigned long)tsSec);
+    notifyAlert(buf);
+    Serial.printf("[BTN] Safe confirmed — sent: %s\n", buf);
+}
+
+static void handleFirebaseRedWatch() {
+    if (!gFirebaseRedPending) return;
+
+    uint32_t elapsed = millis() - gFirebaseRedStartMs;
+    if (elapsed >= FIREBASE_ALERT_CONFIRM_MS) {
+        confirmFirebaseRedWatch();
+    }
+}
+
+static void handleFirebaseStatus() {
+    handleWifiReconnect();
+
+    static uint32_t lastPollMs = 0;
+    uint32_t now = millis();
+    if ((uint32_t)(now - lastPollMs) < FIREBASE_POLL_INTERVAL_MS) return;
+    lastPollMs = now;
+
+    if (WiFi.status() != WL_CONNECTED) {
+        setFirebaseIdleLedState(); // yellow while WiFi/Firebase is not available
+        return;
+    }
+
+    String status;
+    if (!fetchFirebaseStatus(status)) {
+        if (!gFallAlertActive && fallDetectState == FDS_IDLE) {
+            setLedState(gBleConnected ? LED_WARNING : LED_ADVERTISING);
+        }
+        return;
+    }
+
+    if (!isFirebaseAlertMode() && fallDetectState == FDS_IDLE) {
+        setLedState(gBleConnected ? LED_CONNECTED : LED_ADVERTISING);
+    }
+
+    if (!gFirebaseHasBaseline) {
+        gFirebaseLastStatus   = status;
+        gFirebaseHasBaseline = true;
+        Serial.printf("[FB] baseline status=\"%s\"\n", gFirebaseLastStatus.c_str());
+        if (isFirebaseFallStatus(status)) {
+            beginFirebaseRedWatch("(boot)", status);
+        }
+        return;
+    }
+
+    if (status == gFirebaseLastStatus) return;
+
+    String oldStatus = gFirebaseLastStatus;
+    gFirebaseLastStatus = status;
+    beginFirebaseRedWatch(oldStatus, status);
+}
+
+// =====================================================================
 // VITALS SOURCE — HR / SpO2
 // ---------------------------------------------------------------------
 // HR & SpO2 are currently SIMULATED because no MAX30102 / PPG sensor is
@@ -365,6 +644,7 @@ static MAX30105 particleSensor;
 static bool maxOk = false;
 
 static uint8_t readHrSample() {
+    if (!USE_MAX30102_SENSOR) return (uint8_t)(65 + (esp_random() % 26));
     if (!maxOk) return 255;
     long irValue = particleSensor.getIR();
     if (irValue < 50000) return 255;
@@ -372,6 +652,7 @@ static uint8_t readHrSample() {
     return (uint8_t)(65 + (esp_random() % 26));
 }
 static uint8_t readSpo2Sample() {
+    if (!USE_MAX30102_SENSOR) return (uint8_t)(93 + (esp_random() % 7));
     if (!maxOk) return 255;
     long irValue = particleSensor.getIR();
     if (irValue < 50000) return 255;
@@ -432,7 +713,7 @@ static void sendVitalsBatch() {
 // =====================================================================
 // BMI PEAK EMITTER — REAL data from BMI160, sent every 5s
 // Format: BMI,<seq>,<ts_sec>,<peak_acc_g>,<peak_gyro_dps>,<active>
-// Updated by detection task each window; loop() picks up and emits.
+// Updated by inference task each window; loop() picks up and emits.
 // =====================================================================
 static void sendBmiSnapshot() {
     uint32_t nowSec = millis() / 1000;
@@ -483,7 +764,7 @@ static bool initBMI160() {
     if (!writeReg(REG_CMD, 0x11)) return false; delay(10);
     if (!writeReg(REG_CMD, 0x15)) return false; delay(80);
     if (!writeReg(REG_ACC_CONF,  0x28)) return false;
-    if (!writeReg(REG_ACC_RANGE, 0x0C)) return false; // +/-16g
+    if (!writeReg(REG_ACC_RANGE, 0x03)) return false;
     if (!writeReg(REG_GYR_CONF,  0x28)) return false;
     if (!writeReg(REG_GYR_RANGE, 0x00)) return false;
     delay(10);
@@ -510,7 +791,7 @@ static void pushSample(const ImuSample &s) {
     gImuWindow[gWindowHead] = s;
     gWindowHead = (gWindowHead + 1) % kWindowSize;
     if (gWindowCount < kWindowSize) gWindowCount++;
-    gSamplesSinceDetection++;
+    gSamplesSinceInference++;
 }
 static void snapshotWindow(ImuSample *dst) {
     int start = (gWindowCount < kWindowSize) ? 0 : gWindowHead;
@@ -519,14 +800,62 @@ static void snapshotWindow(ImuSample *dst) {
 }
 
 // =====================================================================
-// THRESHOLD FALL DETECTION
+// TFLITE MICRO
 // =====================================================================
-static bool runThresholdOnSnapshot(const ImuSample *snap,
-                                   bool &thresholdFallOut,
-                                   bool &activityActiveOut)
+static int8_t quantizeInput(float v) {
+    float scale = inputTensor->params.scale;
+    int   zp    = inputTensor->params.zero_point;
+    int   q     = (int)lroundf(v / scale) + zp;
+    if (q >  127) q =  127;
+    if (q < -128) q = -128;
+    return (int8_t)q;
+}
+static float dequantizeOutput(int8_t v) {
+    return (v - outputTensor->params.zero_point) * outputTensor->params.scale;
+}
+
+static bool initModel() {
+    model = tflite::GetModel(fall_detection_model_tflite);
+    if (model->version() != TFLITE_SCHEMA_VERSION) {
+        Serial.println("[MODEL] schema mismatch"); return false;
+    }
+    static tflite::MicroErrorReporter microErr;
+    errorReporter = &microErr;
+    static tflite::AllOpsResolver resolver;
+    static tflite::MicroInterpreter si(model, resolver, tensorArena, kTensorArenaSize, errorReporter);
+    interpreter = &si;
+    if (interpreter->AllocateTensors() != kTfLiteOk) {
+        Serial.println("[MODEL] AllocateTensors failed"); return false;
+    }
+    inputTensor  = interpreter->input(0);
+    outputTensor = interpreter->output(0);
+    outputElementCount = 1;
+    for (int i = 0; i < outputTensor->dims->size; i++)
+        outputElementCount *= outputTensor->dims->data[i];
+    Serial.printf("[MODEL] ready (arena=%dKB out=%d)\n", kTensorArenaSize/1024, outputElementCount);
+    return true;
+}
+
+// Returns true on success; fallProb=0 when any gate rejects.
+// activityCount:    consecutive active windows (reset on idle).
+// highImpactSeen:   true if any window in current streak had peak > HIGH_IMPACT thresholds.
+// activityActiveOut: true if THIS window crossed the activity threshold.
+// candidateActiveOut: true if THIS window crossed the candidate threshold.
+// aiWindowActive:   true while within the 5s AI window opened by a peak.
+// aiWindowStartMs:  millis() when the current AI window was opened.
+static bool runInferenceOnSnapshot(const ImuSample *snap,
+                                   float    &fallProb,
+                                   int      &activityCount,
+                                   bool     &highImpactSeen,
+                                   bool     &activityActiveOut,
+                                   bool     &candidateActiveOut,
+                                   bool     &aiWindowActive,
+                                   uint32_t &aiWindowStartMs)
 {
-    float maxAcc = 0.0f;
-    float maxGyr = 0.0f;
+    fallProb = 0.0f;
+    if (!modelOk) return false;
+
+    float maxAcc = 0, maxGyr = 0;
     for (int i = 0; i < kWindowSize; i++) {
         float a = sqrtf(snap[i].ax*snap[i].ax + snap[i].ay*snap[i].ay + snap[i].az*snap[i].az);
         float g = sqrtf(snap[i].gx*snap[i].gx + snap[i].gy*snap[i].gy + snap[i].gz*snap[i].gz);
@@ -534,36 +863,96 @@ static bool runThresholdOnSnapshot(const ImuSample *snap,
         if (g > maxGyr) maxGyr = g;
     }
 
-    bool rawThresholdFall = (maxAcc > FALL_ACC_THRESHOLD || maxGyr > FALL_GYRO_THRESHOLD);
-    activityActiveOut = (maxAcc > ACTIVITY_ACC_THRESHOLD || maxGyr > ACTIVITY_GYRO_THRESHOLD);
+    bool candidateActive = (maxAcc > CANDIDATE_ACC_THRESHOLD || maxGyr > CANDIDATE_GYRO_THRESHOLD);
+    bool activityActive  = (maxAcc > ACTIVITY_ACC_THRESHOLD  || maxGyr > ACTIVITY_GYRO_THRESHOLD);
 
-    // Publish live BMI peak snapshot — picked up by BMI emitter for BLE notify.
+    activityActiveOut  = activityActive;
+    candidateActiveOut = candidateActive;
+
+    // Publish live BMI peak snapshot — picked up by BMI emitter for BLE notify
     gLastPeakAcc  = maxAcc;
     gLastPeakGyro = maxGyr;
-    gLastActive   = activityActiveOut;
+    gLastActive   = activityActive;
 
-    static int activityCount = 0;
-    static int idleCount = 0;
+    static int idleCount = 0; // Đếm số window nhàn rỗi
 
-    if (activityActiveOut) {
+    // Activity gate: 3 consecutive active windows. 3 consecutive idle windows resets everything.
+    if (activityActive) {
         idleCount = 0;
         if (activityCount < ACTIVITY_WINDOW_COUNT) activityCount++;
+        // Track if any window in this streak had a violent high-impact peak
+        if (maxAcc > HIGH_IMPACT_ACC_MIN && maxGyr > HIGH_IMPACT_GYRO_MIN)
+            highImpactSeen = true;
     } else {
         idleCount++;
-        if (idleCount >= 3) activityCount = 0;
+        if (idleCount >= 3) {
+            activityCount   = 0;
+            highImpactSeen  = false;
+        }
     }
 
-    // Người đeo "vào trạng thái hoạt động" khi đã tích lũy đủ ACTIVITY_WINDOW_COUNT
-    // window active. Fall threshold only opens FALL_WATCH after this pre-activity gate.
+    // Người đeo "vào trạng thái hoạt động" khi đã tích lũy đủ ACTIVITY_WINDOW_COUNT (2)
+    // window active. Cờ này gate LED nền (ADVERTISING/CONNECTED) — chưa đủ thì LED tắt.
     gWearerActive = (activityCount >= ACTIVITY_WINDOW_COUNT);
-    thresholdFallOut = (rawThresholdFall && gWearerActive);
 
-    Serial.printf("[THRESH] acc=%.2fg gyro=%.1fdps  rawFall=%s  armed=%s  activity=%d/%d\n",
+    Serial.printf("[GATE] acc=%.2fg gyro=%.1fdps  cand=%s  activity=%d/%d  highImpact=%s\n",
                   maxAcc, maxGyr,
-                  rawThresholdFall ? "YES" : "no",
-                  gWearerActive ? "YES" : "no",
-                  activityCount, ACTIVITY_WINDOW_COUNT);
+                  candidateActive ? "yes" : "no",
+                  activityCount, ACTIVITY_WINDOW_COUNT,
+                  highImpactSeen ? "YES" : "no");
 
+    if (!candidateActive || activityCount < ACTIVITY_WINDOW_COUNT) {
+        return true;
+    }
+
+    // High-impact gate: among the 3 active windows, at least 1 must have had
+    // peak_acc > 10g AND peak_gyro > 500 dps
+    if (!highImpactSeen) {
+        Serial.printf("[GATE] highImpact=no — need 1 window with acc>%.0fg AND gyro>%.0fdps\n",
+                      HIGH_IMPACT_ACC_MIN, HIGH_IMPACT_GYRO_MIN);
+        return true;
+    }
+
+    // Impact: require significant gyro rotation in window
+    if (maxGyr < FALL_IMPACT_GYRO_MIN) {
+        Serial.printf("[IMPACT] peak_gyro=%.1fdps < %.1fdps — reject\n", maxGyr, FALL_IMPACT_GYRO_MIN);
+        return true;
+    }
+
+    // ── AI WINDOW — chạy tối đa AI_WINDOW_DURATION_MS sau khi có peak ──────────
+    // Peak = tất cả các gate đều pass. Nếu hết 5s mà chưa có fall → tắt AI,
+    // reset highImpactSeen để yêu cầu peak mới mới mở lại.
+    if (!aiWindowActive) {
+        aiWindowActive  = true;
+        aiWindowStartMs = millis();
+        Serial.println("[AI] Window opened — AI active for 5s");
+    }
+    uint32_t aiElapsed = millis() - aiWindowStartMs;
+    if (aiElapsed >= AI_WINDOW_DURATION_MS) {
+        aiWindowActive = false;
+        highImpactSeen = false; // cần peak mới để mở lại AI
+        Serial.printf("[AI] Window expired (%lums) — no fall, waiting for next peak\n",
+                      (unsigned long)aiElapsed);
+        return true; // fallProb = 0
+    }
+    Serial.printf("[AI] Window active %lums / %lums\n",
+                  (unsigned long)aiElapsed, (unsigned long)AI_WINDOW_DURATION_MS);
+    // ─────────────────────────────────────────────────────────────────────────
+
+    for (int t = 0; t < kWindowSize; t++) {
+        inputTensor->data.int8[t * kFeatureCount + 0] = quantizeInput(snap[t].ax);
+        inputTensor->data.int8[t * kFeatureCount + 1] = quantizeInput(snap[t].ay);
+        inputTensor->data.int8[t * kFeatureCount + 2] = quantizeInput(snap[t].az);
+        inputTensor->data.int8[t * kFeatureCount + 3] = quantizeInput(snap[t].gx);
+        inputTensor->data.int8[t * kFeatureCount + 4] = quantizeInput(snap[t].gy);
+        inputTensor->data.int8[t * kFeatureCount + 5] = quantizeInput(snap[t].gz);
+    }
+    if (interpreter->Invoke() != kTfLiteOk) {
+        Serial.println("[MODEL] invoke failed"); return false;
+    }
+    fallProb = (outputElementCount == 1)
+        ? constrain(dequantizeOutput(outputTensor->data.int8[0]), 0.0f, 1.0f)
+        : dequantizeOutput(outputTensor->data.int8[1]);
     return true;
 }
 
@@ -586,17 +975,16 @@ static bool checkStillness(const ImuSample *snap) {
 // FALL DETECT STATE MACHINE
 // (FallDetectState enum + fallDetectState already declared above for LED)
 // =====================================================================
+static int             fallWatchLeft       = 0;
 static uint32_t        monitorStartMs      = 0;    // khi nào bắt đầu vào STILL_TIMING
 static uint32_t        stillnessStartMs    = 0;
 static bool            stillnessTimerArmed = false;
-static bool            fallRedShown        = false;
 static float           gLastFallProb       = 0.0f;
 
 static void onFallConfirmed(float fallProb) {
     gFallAlertActive = true;
     setLedState(LED_ALARM);
 
-    // V4 has no model probability; 1.000/0.000 means threshold path was confirmed.
     char buf[80];
     uint32_t tsSec = millis() / 1000;
     snprintf(buf, sizeof(buf),
@@ -608,43 +996,55 @@ static void onFallConfirmed(float fallProb) {
     notifyAlert(buf);
 }
 
-// After a threshold peak, keep monitoring instead of cancelling on immediate
-// movement. A real fall can include rolling, arm motion, or device bounce before
-// the wearer becomes still.
-static void updateFallStateMachine(bool thresholdFall, bool stillnessNow, bool activityActive,
+// cancelActive: true nếu peak window vượt ngưỡng HUỶ (cao hơn ngưỡng activity thông thường).
+// Dùng ngưỡng riêng để tránh huỷ nhầm do phản xạ ngã (lăn người, giơ tay) — chỉ huỷ
+// khi chuyển động đủ mạnh để khẳng định người vẫn hoàn toàn bình thường.
+static void updateFallStateMachine(float fallProb, bool stillnessNow, bool activityActive,
                                    float peakAcc, float peakGyr) {
+    bool isFall      = (fallProb >= FALL_DECISION_THRESHOLD);
+    bool cancelActive = (peakAcc > CANCEL_ACC_THRESHOLD || peakGyr > CANCEL_GYRO_THRESHOLD);
+
     switch (fallDetectState) {
         case FDS_IDLE:
-            if (thresholdFall) {
-                gLastFallProb      = 1.0f;
-                fallDetectState    = FDS_STILL_TIMING;
-                monitorStartMs     = millis();
-                stillnessTimerArmed = false;
-                savePreFallLedState();
-                fallRedShown       = false;
-                Serial.printf("[FSM] IDLE -> STILL_TIMING (threshold %.2fg/%.1fdps, LED unchanged, monitor timeout=10s)\n",
-                              peakAcc, peakGyr);
+            if (isFall && stillnessNow) {
+                gLastFallProb   = fallProb;
+                fallDetectState = FDS_FALL_WATCH;
+                fallWatchLeft   = FALL_WATCH_WINDOWS - 1;
+                setLedState(LED_FALL_WATCH);
+                Serial.printf("[FSM] IDLE -> FALL_WATCH (left=%d)\n", fallWatchLeft);
             }
             break;
 
         case FDS_FALL_WATCH:
-            fallDetectState = FDS_STILL_TIMING;
-            monitorStartMs = millis();
-            stillnessTimerArmed = false;
-            fallRedShown = false;
-            Serial.println("[FSM] FALL_WATCH -> STILL_TIMING (legacy recovery)");
+            // Chỉ huỷ khi chuyển động vượt ngưỡng cancel (3.5g/150dps) —
+            // phản xạ nhỏ sau ngã không đủ để huỷ
+            if (cancelActive) {
+                fallDetectState = FDS_IDLE;
+                setLedState(gBleConnected ? LED_CONNECTED : LED_ADVERTISING);
+                Serial.printf("[FSM] FALL_WATCH: strong activity (%.2fg/%.1fdps) -> IDLE\n",
+                              peakAcc, peakGyr);
+                break;
+            }
+            if (fallWatchLeft > 0) {
+                fallWatchLeft--;
+                Serial.printf("[FSM] FALL_WATCH left=%d\n", fallWatchLeft);
+            } else {
+                fallDetectState     = FDS_STILL_TIMING;
+                monitorStartMs      = millis();
+                stillnessTimerArmed = false;
+                Serial.println("[FSM] FALL_WATCH -> STILL_TIMING (monitor timeout=10s)");
+            }
             break;
 
         case FDS_STILL_TIMING: {
             uint32_t monitorElapsed = millis() - monitorStartMs;
-            bool isMoving = !stillnessNow;
+            bool isMoving = (cancelActive || !stillnessNow);
 
             // Monitoring timeout — hết cửa sổ theo dõi
             if (monitorElapsed >= FALL_MONITOR_TIMEOUT_MS) {
                 fallDetectState     = FDS_IDLE;
                 stillnessTimerArmed = false;
-                fallRedShown        = false;
-                restorePreFallLedState();
+                setLedState(gBleConnected ? LED_CONNECTED : LED_ADVERTISING);
                 Serial.printf("[FSM] STILL_TIMING: timeout %lums -> IDLE (safe)\n",
                               (unsigned long)monitorElapsed);
                 break;
@@ -654,10 +1054,6 @@ static void updateFallStateMachine(bool thresholdFall, bool stillnessNow, bool a
                 // Cử động → reset substance, VẪN trong STILL_TIMING
                 if (stillnessTimerArmed) {
                     stillnessTimerArmed = false;
-                    if (fallRedShown) {
-                        fallRedShown = false;
-                        showPreFallLedState();
-                    }
                     Serial.printf("[FSM] STILL_TIMING: %s -> substance reset (monitor=%lums/%lums)\n",
                                   activityActive ? "activity" : "motion",
                                   (unsigned long)monitorElapsed,
@@ -675,16 +1071,9 @@ static void updateFallStateMachine(bool thresholdFall, bool stillnessNow, bool a
                 Serial.printf("[FSM] STILL_TIMING: still=%lums/%lums  monitor=%lums/%lums\n",
                               (unsigned long)stillElapsed, (unsigned long)FALL_STILL_DURATION_MS,
                               (unsigned long)monitorElapsed, (unsigned long)FALL_MONITOR_TIMEOUT_MS);
-                if (!fallRedShown && stillElapsed >= FALL_RED_DELAY_MS) {
-                    fallRedShown = true;
-                    setLedState(LED_FALL_WATCH);
-                    Serial.printf("[FSM] STILL_TIMING: still >= %lums -> LED red\n",
-                                  (unsigned long)FALL_RED_DELAY_MS);
-                }
                 if (stillElapsed >= FALL_STILL_DURATION_MS) {
                     fallDetectState     = FDS_IDLE;
                     stillnessTimerArmed = false;
-                    fallRedShown        = false;
                     onFallConfirmed(gLastFallProb);
                 }
             }
@@ -706,20 +1095,25 @@ static void taskSampling(void *pvParams) {
 
         xSemaphoreTake(gImuMutex, portMAX_DELAY);
         pushSample(s);
-        bool windowReady = (gWindowCount >= kWindowSize) && (gSamplesSinceDetection >= kDetectionStride);
-        if (windowReady) gSamplesSinceDetection = 0;
+        bool windowReady = (gWindowCount >= kWindowSize) && (gSamplesSinceInference >= kInferenceStride);
+        if (windowReady) gSamplesSinceInference = 0;
         xSemaphoreGive(gImuMutex);
 
-        if (windowReady && gDetectionTask != nullptr)
-            xTaskNotifyGive(gDetectionTask);
+        if (windowReady && gInferenceTask != nullptr)
+            xTaskNotifyGive(gInferenceTask);
     }
 }
 
 // =====================================================================
-// TASK 2: THRESHOLD DETECTION — Core 1, priority 1
+// TASK 2: INFERENCE — Core 1, priority 1
 // =====================================================================
-static void taskFallDetect(void *pvParams) {
-    static uint32_t detectionCount = 0;
+static void taskInference(void *pvParams) {
+    static uint32_t inferenceCount  = 0;
+    static int      activityCount   = 0;
+    static bool     highImpactSeen  = false;
+    static bool     aiWindowActive  = false;
+    static uint32_t aiWindowStartMs = 0;
+
     while (true) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
@@ -728,24 +1122,35 @@ static void taskFallDetect(void *pvParams) {
         xSemaphoreGive(gImuMutex);
 
         if (gFallAlertActive) {
+            aiWindowActive = false;
             continue;
         }
 
         uint32_t t0 = millis();
-        bool thresholdFall = false;
-        bool activityActive = false;
-        bool ok = runThresholdOnSnapshot(gSnapshot, thresholdFall, activityActive);
+        float fallProb        = 0.0f;
+        bool  activityActive  = false;
+        bool  candidateActive = false;
+        bool ok = runInferenceOnSnapshot(gSnapshot, fallProb, activityCount,
+                                         highImpactSeen, activityActive, candidateActive,
+                                         aiWindowActive, aiWindowStartMs);
         uint32_t latencyMs = millis() - t0;
-        detectionCount++;
+        inferenceCount++;
 
-        if (!ok) { Serial.println("[THRESH] detection error"); continue; }
+        if (!ok) { Serial.println("[AI] inference error"); continue; }
 
-        Serial.printf("[DETECT] #%lu  threshold=%s  latency=%lums\n",
-                      detectionCount, thresholdFall ? "FALL?" : "non-fall", latencyMs);
+        bool isFall = (fallProb >= FALL_DECISION_THRESHOLD);
+        Serial.printf("[INFER] #%lu  fall_prob=%.3f  latency=%lums  -> %s\n",
+                      inferenceCount, fallProb, latencyMs, isFall ? "FALL?" : "non-fall");
 
         bool stillnessNow = checkStillness(gSnapshot);
-        updateFallStateMachine(thresholdFall, stillnessNow, activityActive,
+        updateFallStateMachine(fallProb, stillnessNow, activityActive,
                                gLastPeakAcc, gLastPeakGyro); // may trigger LED_ALARM
+
+        // Đóng AI window khi FSM đã nhận fall (FALL_WATCH / STILL_TIMING)
+        if (fallDetectState != FDS_IDLE) {
+            aiWindowActive = false;
+        }
+
     }
 }
 
@@ -753,38 +1158,26 @@ static void taskFallDetect(void *pvParams) {
 // BUTTON — debounce + dual action
 // =====================================================================
 static void handleButton() {
-    int reading       = digitalRead(PIN_BUTTON);
-    unsigned long now = millis();
-    if (reading != btnLastReading) { btnLastChange = now; btnLastReading = reading; }
-    if ((unsigned long)(now - btnLastChange) >= DEBOUNCE_MS && reading != btnStable) {
-        btnStable = reading;
-        if (btnStable != LOW) return;
+    if (!gButtonPressLatched) return;
 
-        char buf[64];
-        uint32_t tsSec = millis() / 1000;
+    noInterrupts();
+    gButtonPressLatched = false;
+    interrupts();
 
-        if (gFallAlertActive) {
-            // Đang alarm → "I'm Safe": tắt loa, gửi SAFE
-            gFallAlertActive = false;
-            fallDetectState  = FDS_IDLE;
-            fallRedShown     = false;
-            restorePreFallLedState();
-            snprintf(buf, sizeof(buf), "SAFE,%lu,%lu",
-                     (unsigned long)++gAlertSeq, (unsigned long)tsSec);
-            notifyAlert(buf);
-            Serial.printf("[BTN] Safe confirmed — sent: %s\n", buf);
-        } else {
-            // Bình thường → trigger fall thủ công (SOS / test)
-            fallDetectState = FDS_IDLE; // cancel any pending FSM state
-            snprintf(buf, sizeof(buf), "ALERT,%lu,%lu,fall,1,1.000,0.000",
-                     (unsigned long)++gAlertSeq, (unsigned long)tsSec);
-            gFallAlertActive = true;
-            fallRedShown     = false;
-            savePreFallLedState();
-            setLedState(LED_ALARM);
-            notifyAlert(buf);
-            Serial.printf("[BTN] Manual fall triggered — sent: %s\n", buf);
-        }
+    uint32_t now = millis();
+    if ((uint32_t)(now - gButtonLastActionMs) < BUTTON_ACTION_GUARD_MS) return;
+    gButtonLastActionMs = now;
+
+    if (isFirebaseAlertMode()) {
+        // Đang đỏ/chờ alert/alarm → "I'm Safe": gửi SAFE và quay về màu trước khi đỏ.
+        cancelFirebaseAlertWithSafe();
+    } else {
+        // Bình thường → trigger fall thủ công (SOS / test)
+        fallDetectState = FDS_IDLE; // cancel any pending FSM state
+        gLedStateBeforeRed = gLedState;
+        gFallAlertActive = true;
+        setLedState(LED_ALARM);
+        sendFallAlertPacket("BTN");
     }
 }
 
@@ -816,6 +1209,8 @@ static void handleBmiSnapshot() {
 // MAX30102 DEBUG TIMER — every 5 s (show IR value)
 // =====================================================================
 static void handleMaxDebug() {
+    if (!USE_MAX30102_SENSOR) return;
+
     static uint32_t lastMaxMs = 0;
     uint32_t now = millis();
     if ((uint32_t)(now - lastMaxMs) >= 5000) {
@@ -837,16 +1232,18 @@ void setup() {
     delay(300);
     Serial.println();
     Serial.println("=======================================================");
-    Serial.println("ESP32-S3  AIFD  S3_AIFD_V4");
-    Serial.println("  Fall: real BMI160 threshold + stillness confirmation");
+    Serial.println("ESP32-S3  AIFD  S3_AIFD_V5(firebase)");
+    Serial.println("  Fall: Firebase Realtime Database /status change");
     Serial.println("  Vitals: simulated HR/SpO2 every 25s");
-    Serial.println("  Button: SAFE during alarm, manual ALERT otherwise");
+    Serial.println("  Button: SAFE during alarm, manual SOS otherwise");
+    Serial.println("  Sensor fall detection: disabled");
     Serial.println("=======================================================");
 
     // GPIO
     pinMode(PIN_LED_VCC, OUTPUT);
     digitalWrite(PIN_LED_VCC, HIGH);        // power the RGB module
     pinMode(PIN_BUTTON,  INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(PIN_BUTTON), onButtonFalling, FALLING);
     pinMode(PIN_BUZZER,  OUTPUT);
     digitalWrite(PIN_BUZZER, LOW);
     tone(PIN_BUZZER, BUZZER_FREQ_HZ); noTone(PIN_BUZZER); // init LEDC at real freq (1Hz fails on S3)
@@ -856,37 +1253,37 @@ void setup() {
     gLedNeo.show();
     applyLedState(LED_BOOT);
 
+    // Firebase mode does not use IMU activity gating, so keep normal status LEDs visible.
+    gWearerActive = true;
+    setLedState(LED_ADVERTISING); // blue is only used during the short init step
+
     // I2C
     Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 100000);
     Wire.setClock(100000);
     Wire.setTimeOut(20);
     delay(50);
 
-    // BMI160
-    bmiOk = initBMI160();
-    Serial.printf("[BMI]   %s (addr=0x%02X)\n", bmiOk ? "OK" : "NOT FOUND", bmi160Addr);
-
-    // MAX30102
-    if (particleSensor.begin(Wire, I2C_SPEED_FAST)) {
-        particleSensor.setup(); // Default setup
-        maxOk = true;
-        Serial.println("[MAX]   OK");
+    // MAX30102 is optional in Firebase mode. Keep vitals simulated when disabled.
+    if (USE_MAX30102_SENSOR) {
+        if (particleSensor.begin(Wire, I2C_SPEED_FAST)) {
+            particleSensor.setup(); // Default setup
+            maxOk = true;
+            Serial.println("[MAX]   OK");
+        } else {
+            Serial.println("[MAX]   NOT FOUND");
+            maxOk = false;
+        }
     } else {
-        Serial.println("[MAX]   NOT FOUND");
         maxOk = false;
+        Serial.println("[MAX]   skipped; V5 uses simulated vitals");
     }
 
-    // FreeRTOS
-    gImuMutex = xSemaphoreCreateMutex();
-    configASSERT(gImuMutex);
-
-    xTaskCreatePinnedToCore(taskSampling, "IMU_SAMPLE", 4096, nullptr,
-                            configMAX_PRIORITIES - 1, nullptr, 0);
-    xTaskCreatePinnedToCore(taskFallDetect, "FALL_DETECT", 4096, nullptr,
-                            1, &gDetectionTask, 1);
+    // Firebase controls the fall alarm in V5. BMI160/TFLite inference tasks are not started.
+    bmiOk   = false;
+    modelOk = false;
 
     // BLE setup — service registered before advertising (Android UUID filter requirement)
-    NimBLEDevice::init("S3_AIFD_V4");
+    NimBLEDevice::init("S3_AIFD_V5");
     NimBLEDevice::setPower(ESP_PWR_LVL_P9);
     
     // Clear all previously saved bonds in NVS so that a reset guarantees a clean state
@@ -918,36 +1315,29 @@ void setup() {
     adv->setScanResponse(true);
     adv->start();
 
-    if (!bmiOk) {
-        gWarnExpireMs = 0; // permanent — sensor error requires reboot
-        setLedState(LED_WARNING);
-    } else {
-        setLedState(LED_ADVERTISING);
-    }
-    Serial.println("[BOOT] Tasks started. Advertising as \"S3_AIFD_V4\"");
+    beginWifi();
+    setFirebaseIdleLedState();
+    Serial.println("[BOOT] Firebase polling enabled. Advertising as \"S3_AIFD_V5\"");
 }
 
 void loop() {
     handleButton();
     handleBlink();
+    handleFirebaseRedWatch();
+    handleFirebaseStatus();
     handleVitalsBatch();
-    handleBmiSnapshot();
     handleMaxDebug();
 
-    // BLE connect/disconnect → LED transition (flags set by callbacks, handled here)
+    // BLE connection owns the idle color: no app = yellow blink, app connected = green when cloud is OK.
     if (gBleJustConnected) {
         gBleJustConnected = false;
-        if (!gFallAlertActive && fallDetectState == FDS_IDLE)
-            setLedState(LED_CONNECTED);
+        setFirebaseIdleLedState();
     }
     if (gBleJustDisconnected) {
         gBleJustDisconnected = false;
-        if (!gFallAlertActive && fallDetectState == FDS_IDLE) {
-            gWarnExpireMs = millis() + 3000;
-            setLedState(LED_WARNING);
-        }
+        setFirebaseIdleLedState();
     }
-    // WARNING auto-return to ADVERTISING after timeout (BLE drop only; sensor error = permanent)
+    // WARNING auto-return kept for legacy temporary warnings.
     if (gLedState == LED_WARNING && gWarnExpireMs != 0 && millis() >= gWarnExpireMs) {
         gWarnExpireMs = 0;
         setLedState(LED_ADVERTISING);
@@ -957,10 +1347,11 @@ void loop() {
     uint32_t now = millis();
     if ((uint32_t)(now - lastStatusMs) >= 5000) {
         lastStatusMs = now;
-        Serial.printf("[BLE]  status=%-11s  handshake=%-7s  sessions=%lu  uptime=%lus\n",
+        Serial.printf("[SYS]  ble=%-11s  handshake=%-7s  wifi=%-11s  fb_status=\"%s\"  uptime=%lus\n",
                       gBleConnected ? "CONNECTED" : "advertising",
                       gBleReady     ? "READY"     : "waiting",
-                      (unsigned long)gConnectCount,
+                      WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString().c_str() : "offline",
+                      gFirebaseHasBaseline ? gFirebaseLastStatus.c_str() : "(none)",
                       (unsigned long)(now / 1000));
     }
 
