@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+env/
+.env/
+AI/venv_v2/
+
+# Generated large artifacts
+/AI/train_model_FallDetection/archive/total_data/all_csv_combined_union.csv
+/AI/train_model_FallDetection/archive/total_data/normalized/normalized_all.csv
+
+# Gradle and Android
+.gradle/
+build/
+local.properties
+*.lock
+*.lockfile
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Binaries and archives
+*.zip
+*.jar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+*.bin
+*.out
+System_Architecture/test_plan/video/
+System_Architecture/test_plan/video/
+System_Architecture/test_plan/video/

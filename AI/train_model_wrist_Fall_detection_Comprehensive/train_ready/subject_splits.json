@@ -1,0 +1,37 @@
+{
+  "train": [
+    "UP_01",
+    "UP_03",
+    "UP_04",
+    "WEDA_02",
+    "WEDA_03",
+    "WEDA_04",
+    "WEDA_06",
+    "WEDA_07",
+    "WEDA_08",
+    "WEDA_09",
+    "WEDA_11",
+    "WEDA_13",
+    "WEDA_14",
+    "WEDA_21",
+    "WEDA_23",
+    "WEDA_25",
+    "WEDA_26",
+    "WEDA_28",
+    "WEDA_29",
+    "WEDA_30",
+    "WEDA_31"
+  ],
+  "validation": [
+    "UP_02",
+    "WEDA_01",
+    "WEDA_12",
+    "WEDA_24",
+    "WEDA_27"
+  ],
+  "test": [
+    "WEDA_05",
+    "WEDA_10",
+    "WEDA_22"
+  ]
+}

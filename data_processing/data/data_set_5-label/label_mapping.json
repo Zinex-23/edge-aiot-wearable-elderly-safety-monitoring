@@ -1,0 +1,30 @@
+{
+  "label_name_to_id": {
+    "fall": 0,
+    "sit": 1,
+    "walk": 2,
+    "hand": 3,
+    "crouching": 4
+  },
+  "activity_to_label": {
+    "F01": "fall",
+    "F02": "fall",
+    "F03": "fall",
+    "F04": "fall",
+    "F05": "fall",
+    "F06": "fall",
+    "F07": "fall",
+    "F08": "fall",
+    "D01": "walk",
+    "D02": "walk",
+    "D03": "walk",
+    "D07": "walk",
+    "D04": "sit",
+    "D05": "sit",
+    "D09": "hand",
+    "D10": "hand",
+    "D11": "hand",
+    "D06": "crouching",
+    "D08": "crouching"
+  }
+}

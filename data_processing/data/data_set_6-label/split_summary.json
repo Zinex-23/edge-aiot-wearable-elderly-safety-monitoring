@@ -1,0 +1,41 @@
+{
+  "test": {
+    "rows": 2839,
+    "subjects": 5,
+    "trials": 248,
+    "labels": {
+      "bending": 195,
+      "fall": 951,
+      "hand_motion": 423,
+      "near_fall": 297,
+      "sitting": 169,
+      "walking": 804
+    }
+  },
+  "train": {
+    "rows": 5299,
+    "subjects": 15,
+    "trials": 520,
+    "labels": {
+      "bending": 269,
+      "fall": 1374,
+      "hand_motion": 956,
+      "near_fall": 427,
+      "sitting": 383,
+      "walking": 1890
+    }
+  },
+  "validation": {
+    "rows": 1843,
+    "subjects": 5,
+    "trials": 201,
+    "labels": {
+      "bending": 92,
+      "fall": 555,
+      "hand_motion": 336,
+      "near_fall": 176,
+      "sitting": 139,
+      "walking": 545
+    }
+  }
+}

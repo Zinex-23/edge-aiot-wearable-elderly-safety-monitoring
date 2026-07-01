@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fall Detection Edge AI Dashboard</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        dark: '#0f172a',
+                        card: '#1e293b',
+                        accent: '#38bdf8',
+                        danger: '#ef4444',
+                        success: '#22c55e',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Theme Variables */
+        :root {
+            --bg-main: #0f172a;
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        html.light {
+            --bg-main: #f1f5f9;
+            --card-bg: rgba(255, 255, 255, 0.8);
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+            --border-color: rgba(0, 0, 0, 0.1);
+        }
+
+        body {
+            background-color: var(--bg-main);
+            color: var(--text-main);
+            font-family: 'Inter', sans-serif;
+            transition: background-color 0.3s, color 0.3s;
+        }
+
+        .glass-card {
+            background: var(--card-bg);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            transition: background-color 0.3s, border-color 0.3s;
+        }
+
+        .text-muted { color: var(--text-muted); }
+        .border-muted { border-color: var(--border-color); }
+
+        .blinking {
+            animation: blinker 1.5s linear infinite;
+        }
+
+        @keyframes blinker {
+            50% {
+                opacity: 0;
+            }
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(128, 128, 128, 0.2);
+            border-radius: 10px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(128, 128, 128, 0.4);
+        }
+
+        /* Modal Styles */
+        .modal-overlay {
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(4px);
+        }
+        .modal-content {
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+        }
+    </style>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body class="p-6 min-h-screen flex flex-col">
+
+    <header class="mb-6 flex flex-wrap justify-between items-center gap-4">
+        <div>
+            <h1 class="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-accent to-blue-600">Edge
+                AI Fall Detection</h1>
+            <p class="text-[10px] text-muted font-mono uppercase tracking-widest" id="currentModeInfo">
+                Current Mode: <span id="displayMode" class="text-accent font-mono uppercase font-bold">{{ mode }}</span>
+                <span id="modeDesc" class="ml-1">— {% if mode == 'ble' %}Live IMU over BLE (100-sample window){% else %}Simulation @ 50Hz (100 samples / 2 s){% endif %}</span>
+                <span class="ml-4 text-emerald-400 border-l border-slate-700 pl-4">AI Model: <span id="activeModelName">V27</span></span>
+            </p>
+        </div>
+        
+        <div class="flex flex-wrap gap-3 items-center">
+            <!-- BLE Connect Button (Visible in BLE mode) -->
+            <button id="btnBleConnect" class="hidden px-3 py-1.5 text-xs font-bold rounded-md bg-indigo-600 text-white hover:bg-indigo-500 transition-all flex items-center gap-2">
+                <span id="connIcon">🔗</span> CONNECT
+            </button>
+
+            <!-- Mode Switcher -->
+            <div class="flex bg-gray-200 dark:bg-gray-800 p-1 rounded-lg border border-muted">
+                <button id="btnSetSim" class="px-3 py-1.5 text-xs font-bold rounded-md transition-all">SIMULATION</button>
+                <button id="btnSetBle" class="px-3 py-1.5 text-xs font-bold rounded-md transition-all">BLE LIVE</button>
+            </div>
+
+            <!-- Theme Switcher -->
+            <button id="themeToggle" class="p-2 rounded-lg bg-gray-200 dark:bg-gray-800 border border-muted hover:bg-gray-300 dark:hover:bg-gray-700 transition">
+                <span id="themeIcon">🌙</span>
+            </button>
+
+            <div class="flex gap-3 items-center ml-2 border-l border-muted pl-4">
+                <span class="relative flex h-3 w-3">
+                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent opacity-75"></span>
+                    <span class="relative inline-flex rounded-full h-3 w-3 bg-accent"></span>
+                </span>
+                <span class="text-sm font-medium">Live Stream</span>
+                <div class="flex flex-col ml-2 border-l border-muted pl-4">
+                    <span id="bleConn" class="text-xs font-mono text-amber-500 dark:text-amber-300/90">BLE: …</span>
+                    <span id="bleDeviceInfo" class="text-[10px] text-muted font-mono hidden"></span>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <div class="grid grid-cols-12 gap-6 flex-1 min-h-0">
+
+        <!-- Left Column: Primary Metrics -->
+        <div class="col-span-12 lg:col-span-3 flex flex-col gap-4 relative h-full">
+
+            <!-- Result Box -->
+            <div class="glass-card p-6 flex flex-col items-center justify-center text-center flex-1 transition-all duration-300 min-h-[160px]"
+                id="resultCard">
+                <span class="text-gray-400 text-xs uppercase font-semibold tracking-wider">Current Prediction</span>
+                <h2 class="text-4xl font-bold mt-2 mb-2" id="currentPrediction">Waiting...</h2>
+                <div class="flex gap-2 text-sm mt-1">
+                    <span class="text-gray-400">Ground Truth:</span>
+                    <span class="font-mono text-gray-200" id="currentGroundTruth">---</span>
+                </div>
+            </div>
+
+            <!-- SIMULATE FALL BUTTON -->
+            <button id="simFallBtn"
+                class="w-full py-4 bg-gray-600 hover:bg-gray-500 rounded-lg font-bold text-white shadow-lg transition text-sm flex items-center justify-center gap-2">
+                <span class="text-lg">🏃</span> CHẾ ĐỘ: BÌNH THƯỜNG
+            </button>
+
+            <div id="statusBadge"
+                class="hidden mt-3 px-3 py-1 rounded-full text-xs font-bold bg-gray-700 text-gray-300 text-center">
+                STATUS
+            </div>
+
+            <!-- Stats Grid -->
+            <div class="grid grid-cols-2 gap-4 flex-1">
+                <div class="glass-card p-4 flex flex-col justify-center">
+                    <span class="text-[11px] text-gray-400 uppercase tracking-wide">Accuracy</span>
+                    <div class="text-xl font-bold text-green-400 mt-2" id="valAccuracy">0.0%</div>
+                </div>
+                <div class="glass-card p-4 flex flex-col justify-center">
+                    <span class="text-[11px] text-gray-400 uppercase tracking-wide">Total Runs</span>
+                    <div class="text-xl font-bold text-white mt-2" id="valTotal">0</div>
+                </div>
+                <div class="glass-card p-4 flex flex-col justify-center">
+                    <span class="text-[11px] text-gray-400 uppercase tracking-wide">Latency</span>
+                    <div class="text-xl font-bold text-yellow-400 mt-2"><span id="valLatency">0</span> ms</div>
+                </div>
+                <div class="glass-card p-4 flex flex-col justify-center">
+                    <span class="text-[11px] text-gray-400 uppercase tracking-wide">Throughput</span>
+                    <div class="text-xl font-bold text-white mt-2"><span id="valFps">0</span> FPS</div>
+                </div>
+                <div class="glass-card p-4 flex flex-col justify-center">
+                    <span class="text-[11px] text-gray-400 uppercase tracking-wide">Est. Energy</span>
+                    <div class="text-xl font-bold text-accent mt-2"><span id="valEnergy">0</span> mJ</div>
+                </div>
+                <div class="glass-card p-4 flex flex-col justify-center">
+                    <span class="text-[11px] font-bold text-gray-400 mb-2 block uppercase">ESP32-S3</span>
+                    <div class="flex justify-between items-center text-[10px] mt-1">
+                        <span class="text-gray-500 uppercase">CPU</span>
+                        <span class="font-bold text-blue-400"><span id="valCpu">0</span>%</span>
+                    </div>
+                    <div class="flex justify-between items-center text-[10px] mt-1">
+                        <span class="text-gray-500 uppercase">RAM</span>
+                        <span class="font-bold text-yellow-500"><span id="valRam">0</span>%</span>
+                    </div>
+                    <div class="flex justify-between items-center text-[10px] mt-1">
+                        <span class="text-gray-500 uppercase">ROM</span>
+                        <span class="font-bold text-green-400"><span id="valFlash">0</span>%</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Middle Column: Charts -->
+        <div class="col-span-12 lg:col-span-6 flex flex-col gap-5 h-full">
+            <!-- Accel Chart -->
+            <div class="glass-card p-4 flex-1 min-h-[240px] relative">
+                <h3 class="text-sm font-semibold mb-2 text-gray-300 absolute top-4 left-4">Accelerometer (g)</h3>
+                <canvas id="accelChart"></canvas>
+            </div>
+            <!-- Gyro Chart -->
+            <div class="glass-card p-4 flex-1 min-h-[240px] relative">
+                <h3 class="text-sm font-semibold mb-2 text-gray-300 absolute top-4 left-4">Gyroscope (deg/s)</h3>
+                <canvas id="gyroChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Right Column: Logs -->
+        <div
+            class="col-span-12 lg:col-span-3 glass-card p-4 flex flex-col overflow-hidden resize-y min-h-[900px] h-[580px]">
+            <h3 class="text-sm font-semibold mb-4 text-gray-300 pb-2 border-b border-gray-700">Detection History</h3>
+            <div class="flex-1 overflow-y-auto pr-2 space-y-3" id="eventLog" style="max-height: 100%;">
+                <!-- Log items injected via JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Data Table Row -->
+    <div class="mt-6 glass-card p-4 flex flex-col">
+        <h3
+            class="text-sm font-semibold mb-4 text-gray-300 border-b border-gray-700 pb-2 flex justify-between items-center">
+            <span>Raw Data Stream (Max 3000 Samples)</span>
+            <div class="flex items-center gap-3">
+                <button id="scrollTopBtn"
+                    class="px-3 py-1 rounded bg-gray-700 text-gray-300 text-xs font-bold hover:bg-gray-600 transition">
+                    ↑ TO TOP
+                </button>
+                <button id="toggleTableBtn"
+                    class="px-3 py-1 rounded bg-accent text-dark text-xs font-bold hover:bg-blue-400 transition">
+                    PAUSE
+                </button>
+                <span class="text-accent text-xs" id="tableStatus">Updating @ 50Hz</span>
+            </div>
+        </h3>
+        <div id="tableContainer" class="overflow-y-auto max-h-[280px] scroll-smooth">
+            <table class="w-full text-sm text-center text-gray-400">
+                <thead class="text-xs text-gray-300 uppercase bg-gray-800/50 sticky top-0">
+                    <tr>
+                        <th scope="col" class="px-4 py-2 text-left">Timestamp (ms)</th>
+                        <th scope="col" class="px-4 py-2">Acc X (g)</th>
+                        <th scope="col" class="px-4 py-2">Acc Y (g)</th>
+                        <th scope="col" class="px-4 py-2">Acc Z (g)</th>
+                        <th scope="col" class="px-4 py-2">Gyro X (deg/s)</th>
+                        <th scope="col" class="px-4 py-2">Gyro Y (deg/s)</th>
+                        <th scope="col" class="px-4 py-2">Gyro Z (deg/s)</th>
+                    </tr>
+                </thead>
+                <tbody id="dataTableBody">
+                    <!-- Rows injected here -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- BLE Connection Modal -->
+    <div id="bleModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 modal-overlay">
+        <div class="glass-card w-full max-w-md modal-content p-6 flex flex-col gap-4">
+            <div class="flex justify-between items-center border-b border-muted pb-3">
+                <h3 class="font-bold text-lg">Select BLE Device</h3>
+                <button id="btnCloseModal" class="text-muted hover:text-danger text-xl">&times;</button>
+            </div>
+            
+            <div id="scanStatus" class="text-sm text-accent animate-pulse hidden">Scanning for devices...</div>
+            
+            <div id="deviceList" class="flex flex-col gap-2 max-h-60 overflow-y-auto pr-1">
+                <!-- Device list items will be injected here -->
+                <div class="text-center py-8 text-muted text-sm">No devices found. Click scan to start.</div>
+            </div>
+
+            <div class="text-[10px] text-amber-500/80 bg-amber-500/5 p-2 rounded border border-amber-500/20">
+                ⚠️ <b>Tip:</b> Ngắt kết nối (Disconnect/Forget) thiết bị khỏi Bluetooth của Laptop trước khi quét để script có thể tìm thấy.
+            </div>
+            
+            <div class="flex gap-3 pt-2">
+                <button id="btnStartScan" class="flex-1 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg font-bold text-white transition text-sm">
+                    START SCAN
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script>
+        // Chart Config
+        const isLight = () => document.documentElement.classList.contains('light');
+        const getMutedColor = () => isLight() ? '#64748b' : '#94a3b8';
+        const getGridColor = () => isLight() ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.05)';
+
+        const chartOptions = {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            elements: { point: { radius: 0 }, line: { borderWidth: 2 } },
+            scales: {
+                x: { display: false },
+                y: { 
+                    grid: { color: getGridColor() }, 
+                    border: { dash: [4, 4] },
+                    ticks: { color: getMutedColor() }
+                }
+            },
+            plugins: { 
+                legend: { 
+                    position: 'top', 
+                    align: 'end', 
+                    labels: { boxWidth: 12, usePointStyle: true, color: getMutedColor() } 
+                } 
+            }
+        };
+
+        const ctxAccel = document.getElementById('accelChart').getContext('2d');
+        const accelChart = new Chart(ctxAccel, {
+            type: 'line',
+            data: {
+                labels: Array.from({ length: 100 }, (_, i) => i),
+                datasets: [
+                    { label: 'X', borderColor: '#f43f5e', data: [] },
+                    { label: 'Y', borderColor: '#3b82f6', data: [] },
+                    { label: 'Z', borderColor: '#10b981', data: [] }
+                ]
+            },
+            options: { ...chartOptions, scales: { y: { ...chartOptions.scales.y, min: -5, max: 5 } } }
+        });
+
+        const ctxGyro = document.getElementById('gyroChart').getContext('2d');
+        const gyroChart = new Chart(ctxGyro, {
+            type: 'line',
+            data: {
+                labels: Array.from({ length: 100 }, (_, i) => i),
+                datasets: [
+                    { label: 'X', borderColor: '#f59e0b', data: [] },
+                    { label: 'Y', borderColor: '#8b5cf6', data: [] },
+                    { label: 'Z', borderColor: '#06b6d4', data: [] }
+                ]
+            },
+            options: { ...chartOptions, scales: { y: { ...chartOptions.scales.y, min: -200, max: 200 } } }
+        });
+
+        function updateCharts(samples) {
+            accelChart.data.datasets[0].data = samples.map(s => s.acc_x);
+            accelChart.data.datasets[1].data = samples.map(s => s.acc_y);
+            accelChart.data.datasets[2].data = samples.map(s => s.acc_z);
+            accelChart.update();
+
+            gyroChart.data.datasets[0].data = samples.map(s => s.gyro_x);
+            gyroChart.data.datasets[1].data = samples.map(s => s.gyro_y);
+            gyroChart.data.datasets[2].data = samples.map(s => s.gyro_z);
+            gyroChart.update();
+        }
+
+        let tablePaused = false;
+        let allSamples = [];
+        let lastSeenTs = 0;
+        let isFallMode = false;
+        let currentRunMode = '{{ mode }}';
+
+        // Theme Toggle
+        document.getElementById('themeToggle').addEventListener('click', function() {
+            const html = document.documentElement;
+            const icon = document.getElementById('themeIcon');
+            if (html.classList.contains('light')) {
+                html.classList.remove('light');
+                html.classList.add('dark');
+                icon.innerText = '🌙';
+            } else {
+                html.classList.remove('dark');
+                html.classList.add('light');
+                icon.innerText = '☀️';
+            }
+            // Update charts colors
+            const muted = getMutedColor();
+            const grid = getGridColor();
+            [accelChart, gyroChart].forEach(chart => {
+                chart.options.scales.y.grid.color = grid;
+                chart.options.scales.y.ticks.color = muted;
+                chart.options.plugins.legend.labels.color = muted;
+                chart.update();
+            });
+        });
+
+        // Mode Switching
+        async function switchRunMode(newMode) {
+            try {
+                const res = await fetch('/api/switch_mode', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode: newMode })
+                });
+                const data = await res.json();
+                currentRunMode = data.mode;
+                
+                // Clear UI state
+                allSamples = [];
+                lastSeenTs = 0;
+                document.getElementById('dataTableBody').innerHTML = '';
+                document.getElementById('eventLog').innerHTML = '';
+                
+                updateModeUI();
+            } catch (e) { console.error("Failed to switch mode", e); }
+        }
+
+        // BLE Modal Logic
+        const bleModal = document.getElementById('bleModal');
+        const btnBleConnect = document.getElementById('btnBleConnect');
+        const btnCloseModal = document.getElementById('btnCloseModal');
+        const btnStartScan = document.getElementById('btnStartScan');
+        const deviceList = document.getElementById('deviceList');
+        const scanStatus = document.getElementById('scanStatus');
+
+        btnBleConnect.addEventListener('click', () => {
+            bleModal.classList.remove('hidden');
+        });
+
+        btnCloseModal.addEventListener('click', () => {
+            bleModal.classList.add('hidden');
+        });
+
+        btnStartScan.addEventListener('click', async () => {
+            scanStatus.classList.remove('hidden');
+            btnStartScan.disabled = true;
+            btnStartScan.innerText = 'SCANNING...';
+            deviceList.innerHTML = '';
+            
+            try {
+                const res = await fetch('/api/ble/scan');
+                const devices = await res.json();
+                
+                if (devices.error) {
+                    throw new Error(devices.error);
+                }
+
+                if (devices.length === 0) {
+                    deviceList.innerHTML = '<div class="text-center py-8 text-muted text-sm">No devices found.</div>';
+                } else {
+                    devices.forEach(dev => {
+                        const item = document.createElement('div');
+                        item.className = 'p-3 rounded-lg border border-muted hover:bg-accent/10 hover:border-accent transition cursor-pointer flex justify-between items-center';
+                        item.innerHTML = `
+                            <div class="flex flex-col">
+                                <span class="font-bold text-sm">${dev.name}</span>
+                                <span class="text-[10px] text-muted font-mono">${dev.address}</span>
+                            </div>
+                            <span class="text-xs font-mono text-accent">${dev.rssi} dBm</span>
+                        `;
+                        item.addEventListener('click', () => connectToDevice(dev.address, dev.name));
+                        deviceList.appendChild(item);
+                    });
+                }
+            } catch (e) {
+                deviceList.innerHTML = `<div class="text-center py-8 text-danger text-sm">Error: ${e.message}</div>`;
+            } finally {
+                scanStatus.classList.add('hidden');
+                btnStartScan.disabled = false;
+                btnStartScan.innerText = 'START SCAN';
+            }
+        });
+
+        async function connectToDevice(address, name) {
+            try {
+                await fetch('/api/ble/connect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ address, name })
+                });
+                bleModal.classList.add('hidden');
+                // Backend will now automatically try to connect to this device
+            } catch (e) {
+                alert("Failed to initiate connection: " + e.message);
+            }
+        }
+
+        function updateModeUI() {
+            const isBle = currentRunMode === 'ble';
+            const btnSim = document.getElementById('btnSetSim');
+            const btnBle = document.getElementById('btnSetBle');
+            const btnConnect = document.getElementById('btnBleConnect');
+            const displayMode = document.getElementById('displayMode');
+            const modeDesc = document.getElementById('modeDesc');
+            const simBtn = document.getElementById('simFallBtn');
+
+            displayMode.innerText = currentRunMode;
+            modeDesc.innerText = isBle ? '— Live IMU over BLE (100-sample window)' : '— Simulation @ 50Hz (100 samples / 2 s)';
+
+            if (isBle) {
+                btnConnect.classList.remove('hidden');
+                btnBle.className = 'px-3 py-1.5 text-xs font-bold rounded-md bg-accent text-white shadow-sm';
+                btnSim.className = 'px-3 py-1.5 text-xs font-bold rounded-md text-muted hover:text-accent';
+                simBtn.innerHTML = '<span class="text-lg">📡</span> BLE LIVE ACTIVE';
+                simBtn.disabled = true;
+                simBtn.className = 'w-full py-3 bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 rounded-lg font-bold transition text-sm flex items-center justify-center gap-2 cursor-default';
+            } else {
+                btnConnect.classList.add('hidden');
+                btnSim.className = 'px-3 py-1.5 text-xs font-bold rounded-md bg-accent text-white shadow-sm';
+                btnBle.className = 'px-3 py-1.5 text-xs font-bold rounded-md text-muted hover:text-accent';
+                simBtn.disabled = false;
+                updateSimFallBtn();
+            }
+        }
+
+        function updateSimFallBtn() {
+            const btn = document.getElementById('simFallBtn');
+            if (isFallMode) {
+                btn.innerHTML = '<span class="text-lg">💥</span> CHẾ ĐỘ: TÉ NGÃ (ON)';
+                btn.className = 'w-full py-3 bg-red-600 hover:bg-red-500 rounded-lg font-bold text-white shadow-lg shadow-red-500/30 transition text-sm flex items-center justify-center gap-2';
+            } else {
+                btn.innerHTML = '<span class="text-lg">🏃</span> CHẾ ĐỘ: BÌNH THƯỜNG';
+                btn.className = 'w-full py-3 bg-gray-600 hover:bg-gray-500 rounded-lg font-bold text-white shadow-lg transition text-sm flex items-center justify-center gap-2';
+            }
+        }
+
+        document.getElementById('btnSetSim').addEventListener('click', () => switchRunMode('simulation'));
+        document.getElementById('btnSetBle').addEventListener('click', () => switchRunMode('ble'));
+
+        document.getElementById('simFallBtn').addEventListener('click', async function () {
+            if (currentRunMode === 'ble') return;
+            isFallMode = !isFallMode;
+            try {
+                await fetch('/api/toggle_mode', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ is_fall_mode: isFallMode })
+                });
+                updateSimFallBtn();
+            } catch (e) { }
+        });
+
+        // Initialize UI
+        updateModeUI();
+
+        document.getElementById('scrollTopBtn').addEventListener('click', function () {
+            document.getElementById('tableContainer').scrollTop = 0;
+        });
+
+        document.getElementById('toggleTableBtn').addEventListener('click', function () {
+            tablePaused = !tablePaused;
+            this.innerText = tablePaused ? 'RESUME' : 'PAUSE';
+            this.className = tablePaused
+                ? 'px-3 py-1 rounded bg-yellow-500 text-dark text-xs font-bold hover:bg-yellow-400 transition'
+                : 'px-3 py-1 rounded bg-accent text-dark text-xs font-bold hover:bg-blue-400 transition';
+
+            if (!tablePaused) {
+                renderWholeTable();
+            }
+        });
+
+        function renderWholeTable() {
+            const tbody = document.getElementById('dataTableBody');
+            let html = '';
+            for (let i = allSamples.length - 1; i >= 0; i--) {
+                html += createRow(allSamples[i]);
+            }
+            tbody.innerHTML = html;
+        }
+
+        function createRow(s) {
+            const d = new Date(s.timestamp_ms);
+            const tsFormatted = d.toLocaleTimeString('en-GB') + '.' + String(d.getMilliseconds()).padStart(3, '0');
+            return `
+                <tr class="border-b border-gray-700 hover:bg-gray-700/50 font-mono text-xs">
+                    <td class="px-4 py-1.5 font-medium text-gray-300 text-left whitespace-nowrap">${tsFormatted}</td>
+                    <td class="px-4 py-1.5 text-red-400">${s.acc_x.toFixed(3)}</td>
+                    <td class="px-4 py-1.5 text-blue-400">${s.acc_y.toFixed(3)}</td>
+                    <td class="px-4 py-1.5 text-green-400">${s.acc_z.toFixed(3)}</td>
+                    <td class="px-4 py-1.5 text-yellow-500">${s.gyro_x.toFixed(2)}</td>
+                    <td class="px-4 py-1.5 text-purple-400">${s.gyro_y.toFixed(2)}</td>
+                    <td class="px-4 py-1.5 text-cyan-400">${s.gyro_z.toFixed(2)}</td>
+                </tr>
+            `;
+        }
+
+        function updateTable(samples) {
+            const tbody = document.getElementById('dataTableBody');
+            const newSamples = [];
+
+            for (let i = 0; i < samples.length; i++) {
+                if (samples[i].timestamp_ms > lastSeenTs) {
+                    newSamples.push(samples[i]);
+                    lastSeenTs = samples[i].timestamp_ms;
+                }
+            }
+
+            if (newSamples.length === 0) return;
+
+            allSamples = allSamples.concat(newSamples);
+            if (allSamples.length > 3000) {
+                allSamples = allSamples.slice(allSamples.length - 3000);
+            }
+
+            if (tablePaused) return;
+
+            let html = '';
+            for (let i = newSamples.length - 1; i >= 0; i--) {
+                html += createRow(newSamples[i]);
+            }
+            tbody.insertAdjacentHTML('afterbegin', html);
+
+            while (tbody.children.length > 3000) {
+                tbody.removeChild(tbody.lastChild);
+            }
+        }
+
+        function updateLog(events) {
+            const logContainer = document.getElementById('eventLog');
+            logContainer.innerHTML = '';
+            events.forEach(ev => {
+                const isFall = ev.prediction === 'fall';
+                const colorClass = isFall ? 'text-danger' : 'text-gray-300';
+                const bgClass = isFall ? 'bg-red-500/10 border border-red-500/20' : 'bg-gray-800/50';
+                const mark = ev.correct ? '✓' : '✗';
+                const markColor = ev.correct ? 'text-success' : 'text-danger';
+
+                const html = `
+                    <div class="p-3 rounded-lg flex flex-col gap-1 text-sm ${bgClass}">
+                        <div class="flex justify-between items-center">
+                            <span class="text-xs text-gray-500">${ev.time}</span>
+                            <span class="${colorClass} font-bold uppercase">${ev.prediction}</span>
+                        </div>
+                        <div class="flex justify-between text-xs items-center mt-1">
+                            <span class="text-gray-400">GT: ${ev.ground_truth}</span>
+                            <div class="flex items-center gap-2">
+                                <span class="text-gray-500">${ev.latency_ms}ms</span>
+                                <span class="font-bold ${markColor}">${mark}</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                logContainer.insertAdjacentHTML('beforeend', html);
+            });
+        }
+
+        async function fetchStatus() {
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+
+                // Update text metrics
+                document.getElementById('valAccuracy').innerText = data.accuracy.toFixed(1) + '%';
+                document.getElementById('valTotal').innerText = data.total_predictions;
+                document.getElementById('valLatency').innerText = data.inference_latency_ms.toFixed(1);
+                document.getElementById('valFps').innerText = data.fps.toFixed(1);
+                document.getElementById('valEnergy').innerText = data.energy_mJ.toFixed(2);
+                document.getElementById('valRam').innerText = data.ram_usage.toFixed(1);
+                document.getElementById('valCpu').innerText = data.cpu_usage.toFixed(1);
+                document.getElementById('valFlash').innerText = data.flash_usage.toFixed(1);
+                
+                // Update Model Name
+                if (data.current_model) {
+                    document.getElementById('activeModelName').innerText = data.current_model;
+                }
+
+                const bleEl = document.getElementById('bleConn');
+                const infoEl = document.getElementById('bleDeviceInfo');
+                if (bleEl && typeof data.ble_connected === 'boolean') {
+                    bleEl.innerText = data.ble_connected ? 'BLE: Connected' : 'BLE: Reconnecting…';
+                    bleEl.className = 'text-xs font-mono ' + (data.ble_connected ? 'text-emerald-400' : 'text-amber-500');
+                    
+                    if (data.ble_connected && data.ble_device_name) {
+                        infoEl.innerText = `${data.ble_device_name} (${data.ble_device_address})`;
+                        infoEl.classList.remove('hidden');
+                    } else {
+                        infoEl.classList.add('hidden');
+                    }
+                }
+
+                // Update Result Card
+                const predEl = document.getElementById('currentPrediction');
+                const gtEl = document.getElementById('currentGroundTruth');
+                const badgeEl = document.getElementById('statusBadge');
+                const cardEl = document.getElementById('resultCard');
+
+                predEl.innerText = (data.current_prediction || "WAITING...").toUpperCase();
+                gtEl.innerText = data.current_ground_truth;
+
+                if (data.current_prediction === 'Sampling...' || data.current_prediction === 'Waiting for IMU...') {
+                    predEl.className = "text-3xl font-bold mt-2 mb-2 text-yellow-400 blinking";
+                    badgeEl.className = "hidden";
+                    cardEl.style.borderColor = "rgba(250, 204, 21, 0.4)";
+                } else {
+                    if (data.current_prediction === 'fall') {
+                        predEl.className = "text-4xl font-bold mt-2 mb-2 text-danger";
+                        cardEl.style.borderColor = "rgba(239, 68, 68, 0.6)";
+                        cardEl.style.boxShadow = "0 0 20px rgba(239,68,68,0.2)";
+                    } else {
+                        predEl.className = "text-4xl font-bold mt-2 mb-2 text-success";
+                        cardEl.style.borderColor = "rgba(34, 197, 94, 0.4)";
+                        cardEl.style.boxShadow = "none";
+                    }
+
+                    badgeEl.className = "mt-3 px-3 py-1 rounded-full text-xs font-bold " +
+                        (data.is_correct ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400");
+                    badgeEl.innerText = data.is_correct ? "CORRECT MATCH" : "INCORRECT";
+                }
+
+                if (data.samples && data.samples.length > 0) {
+                    updateCharts(data.samples);
+                    updateTable(data.samples);
+                }
+                if (data.events && data.events.length > 0) {
+                    updateLog(data.events);
+                }
+
+            } catch (err) {
+                console.error("Failed to fetch simulation status", err);
+            }
+        }
+
+        // Poll every 100ms for smooth updates
+        setInterval(fetchStatus, 100);
+    </script>
+</body>
+
+</html>

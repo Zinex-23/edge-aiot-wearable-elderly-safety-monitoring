@@ -1,0 +1,3 @@
+class_name,before_balancing_windows,after_balancing_windows,percentage_of_total,train_window_count,validation_window_count,test_window_count
+fall,1628,1628,0.5,1140,244,244
+non_fall,5468,1628,0.5,1139,244,245

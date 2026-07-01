@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Giám Sát Sức Khỏe</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+</head>
+<body>
+    <h1>Giám Sát Sức Khỏe Người Cao Tuổi</h1>
+    <div id="heart-rate-chart" style="width: 100%; height: 420px; margin-bottom: 32px;"></div>
+    <div id="spo2-chart" style="width: 100%; height: 420px;"></div>
+
+    <script>
+        function renderEmptyState(chartId, title) {
+            Plotly.react(chartId, [], {
+                title,
+                xaxis: { title: 'Thời gian' },
+                yaxis: { title: 'Giá trị' },
+                annotations: [
+                    {
+                        text: 'Chưa có dữ liệu. Hãy chạy simulate_data.py để bắt đầu.',
+                        showarrow: false,
+                        xref: 'paper',
+                        yref: 'paper',
+                        x: 0.5,
+                        y: 0.5
+                    }
+                ]
+            }, { responsive: true });
+        }
+
+        function renderChart(data) {
+            if (!data.length) {
+                renderEmptyState('heart-rate-chart', 'Nhịp Tim Theo Thời Gian');
+                renderEmptyState('spo2-chart', 'SpO2 Theo Thời Gian');
+                return;
+            }
+
+            const timestamps = data.map(item => item.timestamp);
+            const heartRate = data.map(item => item.heart_rate);
+            const spo2 = data.map(item => item.spo2);
+
+            const heartRateTrace = {
+                x: timestamps,
+                y: heartRate,
+                mode: 'lines+markers',
+                name: 'Heart Rate',
+                connectgaps: true,
+                line: { color: 'blue' }
+            };
+
+            const spo2Trace = {
+                x: timestamps,
+                y: spo2,
+                mode: 'lines+markers',
+                name: 'SpO2',
+                connectgaps: true,
+                line: { color: 'green' }
+            };
+
+            const baseLayout = {
+                xaxis: { title: 'Thời gian', type: 'date' },
+                margin: { t: 60, r: 20, b: 60, l: 50 }
+            };
+
+            Plotly.react('heart-rate-chart', [heartRateTrace], {
+                ...baseLayout,
+                title: 'Nhịp Tim Theo Thời Gian',
+                yaxis: { title: 'BPM' }
+            }, { responsive: true });
+
+            Plotly.react('spo2-chart', [spo2Trace], {
+                ...baseLayout,
+                title: 'SpO2 Theo Thời Gian',
+                yaxis: { title: '%' }
+            }, { responsive: true });
+        }
+
+        function loadData() {
+            $.getJSON('/data', function(data) {
+                renderChart(data);
+            });
+        }
+
+        loadData();
+        setInterval(loadData, 10000);
+    </script>
+</body>
+</html>

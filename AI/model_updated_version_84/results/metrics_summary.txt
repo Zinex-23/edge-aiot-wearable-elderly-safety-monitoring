@@ -1,0 +1,8 @@
+Accuracy:  0.9310
+Recall:    0.9851
+Precision: 0.8889
+F1:        0.9345
+FAR:       0.1231
+MissRate:  0.0149
+Threshold: 0.42
+Epoch:     78

@@ -1,0 +1,64 @@
+======================================================================
+FETCH & COMPARE REPORT
+userId = dien562003   range = 24h   now(UTC) = 2026-05-21T06:26:15Z
+======================================================================
+
+[1] RAW DATA — last 24h from MongoDB (no limit)
+----------------------------------------------------------------------
+Total records in last 24h: 0
+  (no records found)
+
+[2] SERVER-SIDE AGGREGATION (cái server.py mới trả về — app sẽ nhận đúng cái này)
+----------------------------------------------------------------------
+Hourly buckets with data: 0 / 24
+
+Giờ UTC                  HR (avg)   SpO2 (avg)  n records
+------------------------------------------------------------
+
+[3] CLIENT-SIDE BUCKETING — áp dụng đúng logic Android bucketCloud()
+----------------------------------------------------------------------
+Input: 0 aggregated hourly items  →  24 slots × 1h each
+HR   filled : 0/24
+SpO2 filled : 0/24
+
+Slot   Label                  HR   SpO2  Chart bar
+------------------------------------------------------------
+  [00] 05/20 07:00             –      –  HR=·
+  [01] 05/20 08:00             –      –  HR=·
+  [02] 05/20 09:00             –      –  HR=·
+  [03] 05/20 10:00             –      –  HR=·
+  [04] 05/20 11:00             –      –  HR=·
+  [05] 05/20 12:00             –      –  HR=·
+  [06] 05/20 13:00             –      –  HR=·
+  [07] 05/20 14:00             –      –  HR=·
+  [08] 05/20 15:00             –      –  HR=·
+  [09] 05/20 16:00             –      –  HR=·
+  [10] 05/20 17:00             –      –  HR=·
+  [11] 05/20 18:00             –      –  HR=·
+  [12] 05/20 19:00             –      –  HR=·
+  [13] 05/20 20:00             –      –  HR=·
+  [14] 05/20 21:00             –      –  HR=·
+  [15] 05/20 22:00             –      –  HR=·
+  [16] 05/20 23:00             –      –  HR=·
+  [17] 05/21 00:00             –      –  HR=·
+  [18] 05/21 01:00             –      –  HR=·
+  [19] 05/21 02:00             –      –  HR=·
+  [20] 05/21 03:00             –      –  HR=·
+  [21] 05/21 04:00             –      –  HR=·
+  [22] 05/21 05:00             –      –  HR=·
+  [23] 05/21 06:00             –      –  HR=·
+
+======================================================================
+[4] SUMMARY — đối chiếu Python vs app
+======================================================================
+Total raw records (MongoDB, last 24h) : 0
+Hourly aggregates from server          : 0
+24h chart — HR   buckets filled        : 0/24
+24h chart — SpO2 buckets filled        : 0/24
+  ✓  Tất cả agg items đã map đúng vào bucket
+
+Cách so sánh với app log:
+  Tìm trong app logcat: 'fetchCloudVitals[24h]: N raw → 24 buckets (hr filled=X/24'
+  Tìm trong app logcat: 'oldest ts=..., newest ts=...'
+  Số 'hr filled' trong log app phải BẰNG filled_hr của Python script này
+  Nếu khác nhau → gửi log app + file này để debug thêm

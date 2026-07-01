@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">CareLink</string>
+    <string name="nav_home">Home</string>
+    <string name="nav_health">Health</string>
+    <string name="nav_history">History</string>
+    <string name="nav_settings">Settings</string>
+</resources>

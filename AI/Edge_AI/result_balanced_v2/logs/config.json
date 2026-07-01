@@ -1,0 +1,7 @@
+{
+  "epochs": 60,
+  "batch_size": 32,
+  "window_size": 100,
+  "stride": 50,
+  "selected_threshold": 0.39999999999999997
+}

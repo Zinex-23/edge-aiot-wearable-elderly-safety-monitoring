@@ -1,0 +1,675 @@
+package com.aifd.ui.screens
+
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import com.aifd.data.DailySteps
+import com.aifd.data.MockDataProvider
+import com.aifd.data.UserRole
+import com.aifd.ui.components.LineChart
+import com.aifd.ui.components.StepsBarChart
+import com.aifd.ui.components.aifd.AifdChartCard
+import com.aifd.ui.components.aifd.AifdChartEmptyState
+import com.aifd.ui.localization.AppLocalizations
+import com.aifd.ui.theme.AIFDTheme
+import com.aifd.ui.theme.AIFDThemeExt
+import com.aifd.viewmodel.CloudLoadState
+import com.aifd.viewmodel.MetricTab
+import com.aifd.viewmodel.MonitoringUiState
+import com.aifd.viewmodel.MonitoringViewModel
+import com.aifd.viewmodel.TimeRange
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MonitoringScreen(
+    viewModel: MonitoringViewModel,
+    role: UserRole
+) {
+    val uiState by viewModel.uiState.collectAsState()
+    MonitoringScreenContent(
+        uiState = uiState,
+        onTabSelected = viewModel::selectTab,
+        onTimeRangeSelected = viewModel::selectTimeRange,
+        onRefreshCloud = viewModel::forceRefreshCloud,
+        stats = viewModel.getStats(),
+        isCaregiver = role == UserRole.CAREGIVER
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MonitoringScreenContent(
+    uiState: MonitoringUiState,
+    onTabSelected: (MetricTab) -> Unit = {},
+    onTimeRangeSelected: (TimeRange) -> Unit = {},
+    onRefreshCloud: () -> Unit = {},
+    stats: Triple<Int, Int, Int> = Triple(0, 0, 0),
+    isCaregiver: Boolean = false
+) {
+    val strings = AppLocalizations.strings
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .navigationBarsPadding(),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+            // ── Metric Tabs ──────────────────────────────────────
+            TabRow(
+                selectedTabIndex = uiState.activeTab.ordinal,
+                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.clip(RoundedCornerShape(12.dp))
+            ) {
+                Tab(
+                    selected = uiState.activeTab == MetricTab.HEART_RATE,
+                    onClick = { onTabSelected(MetricTab.HEART_RATE) }
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(
+                            Icons.Default.Favorite,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(strings.heartRate, style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+                Tab(
+                    selected = uiState.activeTab == MetricTab.SPO2,
+                    onClick = { onTabSelected(MetricTab.SPO2) }
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(
+                            Icons.Default.WaterDrop,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text("SpO2", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+
+            when (uiState.activeTab) {
+                MetricTab.HEART_RATE -> HeartRateContent(uiState, onTimeRangeSelected, onRefreshCloud, stats, isCaregiver)
+                MetricTab.SPO2 -> SpO2Content(uiState, onTimeRangeSelected, onRefreshCloud, stats, isCaregiver)
+            }
+
+            Spacer(modifier = Modifier.height(80.dp))
+    }
+}
+
+
+
+@Composable
+private fun TimeRangeSelector(
+    selected: TimeRange,
+    onSelected: (TimeRange) -> Unit,
+    showLive: Boolean = true
+) {
+    val strings = AppLocalizations.strings
+    val tabs = remember(showLive) {
+        if (showLive) listOf(TimeRange.LIVE, TimeRange.ONE_HOUR, TimeRange.TWENTY_FOUR_HOURS)
+        else listOf(TimeRange.ONE_HOUR, TimeRange.TWENTY_FOUR_HOURS)
+    }
+    // Clamp selectedIdx agar tidak out-of-bounds jika LIVE dihapus untuk caregiver
+    val selectedIdx = tabs.indexOf(selected).coerceAtLeast(0)
+
+    val animIdx by animateFloatAsState(
+        targetValue  = selectedIdx.toFloat(),
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness    = Spring.StiffnessMediumLow
+        ),
+        label = "tab_slide"
+    )
+
+    val surfaceColor    = MaterialTheme.colorScheme.surface
+    val bgColor         = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+    val onSurface       = MaterialTheme.colorScheme.onSurface
+    val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
+
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(58.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(bgColor)
+            .padding(4.dp)
+    ) {
+        val tabW = maxWidth / tabs.size
+
+        // ── Sliding white indicator ────────────────────────────────────────
+        Box(
+            modifier = Modifier
+                .width(tabW)
+                .fillMaxHeight()
+                .offset(x = tabW * animIdx)
+                .shadow(2.dp, RoundedCornerShape(10.dp), clip = false)
+                .clip(RoundedCornerShape(10.dp))
+                .background(surfaceColor)
+        )
+
+        // ── Tab items ──────────────────────────────────────────────────────
+        Row(modifier = Modifier.fillMaxWidth().fillMaxHeight()) {
+            tabs.forEach { range ->
+                val isSelected  = selected == range
+                val contentAlpha by animateFloatAsState(
+                    targetValue  = if (isSelected) 1f else 0.45f,
+                    animationSpec = tween(200),
+                    label        = "tab_alpha"
+                )
+                val icon = when (range) {
+                    TimeRange.LIVE          -> Icons.Default.Wifi
+                    TimeRange.ONE_HOUR      -> Icons.Default.AccessTime
+                    TimeRange.TWENTY_FOUR_HOURS -> Icons.Default.CalendarMonth
+                }
+                val label = when (range) {
+                    TimeRange.LIVE          -> strings.live
+                    TimeRange.ONE_HOUR      -> strings.oneHour
+                    TimeRange.TWENTY_FOUR_HOURS -> strings.twentyFourHours
+                }
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { onSelected(range) },
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    // LIVE icon blink animation
+                    if (range == TimeRange.LIVE && isSelected) {
+                        val blink by rememberInfiniteTransition(label = "blink").animateFloat(
+                            initialValue = 1f, targetValue = 0.3f,
+                            animationSpec = infiniteRepeatable(tween(800, easing = LinearEasing), RepeatMode.Reverse),
+                            label = "blink"
+                        )
+                        Icon(
+                            Icons.Default.FiberManualRecord,
+                            contentDescription = null,
+                            modifier = Modifier.size(10.dp),
+                            tint = AIFDThemeExt.colors.safe.copy(alpha = blink)
+                        )
+                    } else {
+                        Icon(
+                            icon,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = (if (isSelected) onSurface else onSurfaceVariant).copy(alpha = contentAlpha)
+                        )
+                    }
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text      = label,
+                        style     = MaterialTheme.typography.labelSmall,
+                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                        color     = (if (isSelected) onSurface else onSurfaceVariant).copy(alpha = contentAlpha)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatsRow(stats: Triple<Int, Int, Int>, unit: String = "") {
+    val strings = AppLocalizations.strings
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        listOf(strings.average to stats.first, strings.min to stats.second, strings.max to stats.third).forEach { (label, value) ->
+            ElevatedCard(
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("$value$unit", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HeartRateContent(
+    uiState: MonitoringUiState,
+    onTimeRangeSelected: (TimeRange) -> Unit,
+    onRefreshCloud: () -> Unit = {},
+    stats: Triple<Int, Int, Int>,
+    isCaregiver: Boolean = false
+) {
+    val strings = AppLocalizations.strings
+
+    // Caregiver không xem được Live (không có BLE) → tự chuyển sang 1H
+    LaunchedEffect(isCaregiver) {
+        if (isCaregiver && uiState.timeRange == TimeRange.LIVE) {
+            onTimeRangeSelected(TimeRange.ONE_HOUR)
+        }
+    }
+
+    TimeRangeSelector(
+        selected  = uiState.timeRange,
+        onSelected = onTimeRangeSelected,
+        showLive  = !isCaregiver
+    )
+
+
+
+    // Current value — chỉ hiện ở Live mode (caregiver không vào được Live nên ẩn luôn)
+    if (!isCaregiver || uiState.timeRange == TimeRange.LIVE) {
+    ElevatedCard(shape = RoundedCornerShape(16.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(strings.current, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        text = uiState.healthData?.heartRate?.toString() ?: "--",
+                        style = MaterialTheme.typography.displaySmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text("bpm", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 4.dp))
+                }
+            }
+            val statusName = uiState.healthData?.heartRateStatus?.name?.lowercase()?.replaceFirstChar { it.uppercase() } ?: strings.unknown
+            com.aifd.ui.components.StatusBadge(
+                text = statusName,
+                color = when (uiState.healthData?.heartRateStatus) {
+                    com.aifd.data.HealthStatus.HIGH -> MaterialTheme.colorScheme.error
+                    com.aifd.data.HealthStatus.LOW -> AIFDThemeExt.colors.warning
+                    else -> AIFDThemeExt.colors.safe
+                }
+            )
+        }
+    }
+    } // end if (!isCaregiver || LIVE)
+
+    // Chart card — only rendered for 1h and 24h modes (LIVE focuses on current value)
+    if (uiState.timeRange != TimeRange.LIVE) {
+        val hasChartData = uiState.chartData.any { it > 0 }
+        AifdChartCard(
+            title     = strings.heartRateTrend,
+            trailing  = if (uiState.timeRange == TimeRange.ONE_HOUR) "1h" else "24h",
+            isLoading = uiState.cloudLoadState == CloudLoadState.LOADING,
+            onRefresh = onRefreshCloud
+        ) {
+            if (hasChartData) {
+                LineChart(
+                    data      = uiState.chartData,
+                    lineColor = MaterialTheme.colorScheme.error,
+                    fillColor = MaterialTheme.colorScheme.error.copy(alpha = 0.1f),
+                    timeRange = uiState.timeRange,
+                    unit      = "bpm"
+                )
+            } else {
+                AifdChartEmptyState(
+                    title    = strings.noChartData,
+                    subtitle = strings.waitingForReadings
+                )
+            }
+        }
+        if (hasChartData) {
+            StatsRow(stats)
+        }
+    }
+
+    // Info/connect cards — hidden entirely for caregiver
+    if (!isCaregiver) if (!uiState.isConnected) {
+        ElevatedCard(
+            shape = RoundedCornerShape(24.dp),
+            elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Box(
+                modifier = Modifier
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(
+                                MaterialTheme.colorScheme.surfaceVariant,
+                                MaterialTheme.colorScheme.surface
+                            )
+                        )
+                    )
+                    .padding(16.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Watch,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(8.dp)
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = strings.noDeviceConnected,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = strings.connectDeviceToView,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = androidx.compose.ui.unit.TextUnit.Unspecified
+                        )
+                    }
+                }
+            }
+        }
+    } else {
+        ElevatedCard(
+            shape = RoundedCornerShape(24.dp),
+            elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Box(
+                modifier = Modifier
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(
+                                MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.8f),
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                            )
+                        )
+                    )
+                    .padding(16.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.error.copy(alpha = 0.1f),
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(8.dp)
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = strings.normalHeartRateRange,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                        Text(
+                            text = strings.heartRateWarning,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = androidx.compose.ui.unit.TextUnit.Unspecified
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SpO2Content(
+    uiState: MonitoringUiState,
+    onTimeRangeSelected: (TimeRange) -> Unit,
+    onRefreshCloud: () -> Unit = {},
+    stats: Triple<Int, Int, Int>,
+    isCaregiver: Boolean = false
+) {
+    val strings = AppLocalizations.strings
+
+    // Caregiver không xem được Live → tự chuyển sang 1H
+    LaunchedEffect(isCaregiver) {
+        if (isCaregiver && uiState.timeRange == TimeRange.LIVE) {
+            onTimeRangeSelected(TimeRange.ONE_HOUR)
+        }
+    }
+
+    TimeRangeSelector(
+        selected   = uiState.timeRange,
+        onSelected = onTimeRangeSelected,
+        showLive   = !isCaregiver
+    )
+
+
+
+    // Current value — chỉ hiện ở Live mode
+    if (!isCaregiver || uiState.timeRange == TimeRange.LIVE) {
+    ElevatedCard(shape = RoundedCornerShape(16.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(strings.current, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        text = uiState.healthData?.spO2?.toString() ?: "--",
+                        style = MaterialTheme.typography.displaySmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text("%", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 4.dp))
+                }
+            }
+            val statusName = uiState.healthData?.spO2Status?.name?.lowercase()?.replaceFirstChar { it.uppercase() } ?: strings.unknown
+            com.aifd.ui.components.StatusBadge(
+                text = statusName,
+                color = when (uiState.healthData?.spO2Status) {
+                    com.aifd.data.HealthStatus.LOW -> AIFDThemeExt.colors.warning
+                    else -> AIFDThemeExt.colors.safe
+                }
+            )
+        }
+    }
+    } // end if (!isCaregiver || LIVE)
+
+    if (uiState.timeRange != TimeRange.LIVE) {
+        val hasChartData = uiState.chartData.any { it > 0 }
+        AifdChartCard(
+            title     = strings.spo2Trend,
+            trailing  = if (uiState.timeRange == TimeRange.ONE_HOUR) "1h" else "24h",
+            isLoading = uiState.cloudLoadState == CloudLoadState.LOADING,
+            onRefresh = onRefreshCloud
+        ) {
+            if (hasChartData) {
+                LineChart(
+                    data      = uiState.chartData,
+                    lineColor = MaterialTheme.colorScheme.primary,
+                    fillColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
+                    timeRange = uiState.timeRange,
+                    unit      = "%"
+                )
+            } else {
+                AifdChartEmptyState(
+                    title    = strings.noChartData,
+                    subtitle = strings.waitingForReadings
+                )
+            }
+        }
+        if (hasChartData) {
+            StatsRow(stats, "%")
+        }
+    }
+
+    // Info/connect cards — hidden entirely for caregiver
+    if (!isCaregiver) if (!uiState.isConnected) {
+        ElevatedCard(
+            shape = RoundedCornerShape(24.dp),
+            elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Box(
+                modifier = Modifier
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(
+                                MaterialTheme.colorScheme.surfaceVariant,
+                                MaterialTheme.colorScheme.surface
+                            )
+                        )
+                    )
+                    .padding(16.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Watch,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(8.dp)
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = strings.noDeviceConnected,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = strings.connectDeviceToView,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = androidx.compose.ui.unit.TextUnit.Unspecified
+                        )
+                    }
+                }
+            }
+        }
+    } else {
+        ElevatedCard(
+            shape = RoundedCornerShape(24.dp),
+            elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Box(
+                modifier = Modifier
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(
+                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.8f),
+                                MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f)
+                            )
+                        )
+                    )
+                    .padding(16.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(8.dp)
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = strings.normalSpo2Range,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Text(
+                            text = strings.lowSpo2Warning,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = androidx.compose.ui.unit.TextUnit.Unspecified
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+@Preview(showBackground = true, showSystemUi = true)
+@Composable
+private fun MonitoringScreenPreview() {
+    AIFDTheme {
+        MonitoringScreenContent(
+            uiState = MonitoringUiState(
+                chartData = MockDataProvider.generateChartData(72.0, 3.0, 55.0, 110.0, 20)
+            )
+        )
+    }
+}

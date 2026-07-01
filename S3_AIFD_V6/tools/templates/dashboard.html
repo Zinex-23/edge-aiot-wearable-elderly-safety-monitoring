@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BMI160 BLE Dashboard</title>
+  <style>
+    :root {
+      --bg: #f5f1e8;
+      --panel: #fffaf1;
+      --ink: #1e2a2f;
+      --muted: #6f7d84;
+      --accent: #0e8a6a;
+      --alert: #cc4b37;
+      --grid: #d8d1c2;
+      --line1: #0e8a6a;
+      --line2: #1e6fa8;
+      --line3: #c78600;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(14, 138, 106, 0.12), transparent 30%),
+        linear-gradient(180deg, #f8f4ec 0%, var(--bg) 100%);
+      color: var(--ink);
+    }
+    .wrap {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    .hero {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: end;
+      margin-bottom: 20px;
+    }
+    .hero h1 {
+      margin: 0;
+      font-size: 32px;
+      letter-spacing: 0.02em;
+    }
+    .hero p {
+      margin: 6px 0 0;
+      color: var(--muted);
+    }
+    .badge {
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: var(--panel);
+      border: 1px solid rgba(30, 42, 47, 0.08);
+      font-weight: 600;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+      margin-bottom: 16px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid rgba(30, 42, 47, 0.08);
+      border-radius: 18px;
+      padding: 16px;
+      box-shadow: 0 10px 25px rgba(30, 42, 47, 0.05);
+    }
+    .label {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .value {
+      font-size: 28px;
+      font-weight: 700;
+    }
+    .toolbar {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+    button {
+      border: none;
+      background: var(--accent);
+      color: white;
+      padding: 10px 14px;
+      border-radius: 12px;
+      font: inherit;
+      cursor: pointer;
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+    .device-meta {
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .charts {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+    }
+    canvas {
+      width: 100%;
+      height: 280px;
+      display: block;
+      background: #fffef9;
+      border-radius: 14px;
+    }
+    .legend {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .legend span::before {
+      content: "";
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+    .l1::before { background: var(--line1); }
+    .l2::before { background: var(--line2); }
+    .l3::before { background: var(--line3); }
+    .fall::before { background: var(--alert); }
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 640px) {
+      .hero { flex-direction: column; align-items: start; }
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hero">
+      <div>
+        <h1>BMI160 BLE Dashboard</h1>
+        <p>Device: {{ device_name }}</p>
+      </div>
+      <div class="badge" id="connection-badge">Disconnected</div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="label">Prediction</div>
+        <div class="value" id="status-text">idle</div>
+      </div>
+      <div class="card">
+        <div class="label">Fall Probability</div>
+        <div class="value" id="fall-prob">0.000</div>
+      </div>
+      <div class="card">
+        <div class="label">Accel Z</div>
+        <div class="value" id="az-value">0.00</div>
+      </div>
+      <div class="card">
+        <div class="label">Gyro Magnitude</div>
+        <div class="value" id="gyro-mag">0.00</div>
+      </div>
+    </div>
+
+    <div class="card toolbar">
+      <button id="connect-btn" type="button">Connect BLE</button>
+      <button id="disconnect-btn" type="button" disabled>Disconnect</button>
+      <div class="device-meta" id="device-meta">Target: {{ device_name }}</div>
+      <div class="device-meta" id="ble-state">State: idle</div>
+    </div>
+
+    <div class="charts">
+      <div class="card">
+        <div class="label">Acceleration (g)</div>
+        <canvas id="accel-chart" width="1100" height="280"></canvas>
+        <div class="legend">
+          <span class="l1">ax</span>
+          <span class="l2">ay</span>
+          <span class="l3">az</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="label">Gyroscope (dps) and Fall Probability</div>
+        <canvas id="gyro-chart" width="1100" height="280"></canvas>
+        <div class="legend">
+          <span class="l1">gx</span>
+          <span class="l2">gy</span>
+          <span class="l3">gz</span>
+          <span class="fall">fall prob</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const SERVICE_UUID = "{{ service_uuid }}";
+    const STATUS_CHAR_UUID = "{{ status_char_uuid }}";
+    const ACCEL_CHAR_UUID = "{{ accel_char_uuid }}";
+    const GYRO_CHAR_UUID = "{{ gyro_char_uuid }}";
+
+    const accelCanvas = document.getElementById("accel-chart");
+    const gyroCanvas = document.getElementById("gyro-chart");
+    const connectBtn = document.getElementById("connect-btn");
+    const disconnectBtn = document.getElementById("disconnect-btn");
+    const deviceMeta = document.getElementById("device-meta");
+    const bleState = document.getElementById("ble-state");
+
+    let bleDevice = null;
+    let bleServer = null;
+    let bleHistory = [];
+    let bleLatest = {
+      connected: false,
+      connection_state: "idle",
+      device_name: "{{ device_name }}",
+      status_text: "idle",
+      status: 0,
+      fall_prob: 0,
+      non_fall_prob: 1,
+      ax: 0,
+      ay: 0,
+      az: 0,
+      gx: 0,
+      gy: 0,
+      gz: 0,
+      last_error: "",
+    };
+
+    function updateSummary() {
+      document.getElementById("connection-badge").textContent =
+        bleLatest.connected ? "Connected" : "Disconnected";
+      document.getElementById("status-text").textContent = bleLatest.status_text;
+      document.getElementById("fall-prob").textContent = Number(bleLatest.fall_prob).toFixed(3);
+      document.getElementById("az-value").textContent = Number(bleLatest.az).toFixed(2);
+      const gyroMag = Math.sqrt(bleLatest.gx ** 2 + bleLatest.gy ** 2 + bleLatest.gz ** 2);
+      document.getElementById("gyro-mag").textContent = gyroMag.toFixed(2);
+      deviceMeta.textContent = `Selected: ${bleLatest.device_name}`;
+      bleState.textContent =
+        `State: ${bleLatest.connection_state}` +
+        (bleLatest.last_error ? ` | ${bleLatest.last_error}` : "");
+      connectBtn.disabled = bleLatest.connection_state === "connecting" || bleLatest.connected;
+      disconnectBtn.disabled = !bleLatest.connected;
+    }
+
+    function drawChart(canvas, series, options) {
+      const ctx = canvas.getContext("2d");
+      const w = canvas.width;
+      const h = canvas.height;
+      const pad = 28;
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = "#fffef9";
+      ctx.fillRect(0, 0, w, h);
+      ctx.strokeStyle = "#d8d1c2";
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= 4; i++) {
+        const y = pad + ((h - pad * 2) / 4) * i;
+        ctx.beginPath();
+        ctx.moveTo(pad, y);
+        ctx.lineTo(w - pad, y);
+        ctx.stroke();
+      }
+      ctx.fillStyle = "#6f7d84";
+      ctx.font = "12px Segoe UI";
+      ctx.fillText(options.min.toFixed(1), 4, h - pad);
+      ctx.fillText(options.max.toFixed(1), 4, pad + 4);
+      const pointCount = series[0]?.values.length || 0;
+      if (pointCount < 2) {
+        ctx.fillText("Waiting for data...", pad + 8, h / 2);
+        return;
+      }
+      const xStep = (w - pad * 2) / (pointCount - 1);
+      const scaleY = (value) => {
+        const ratio = (value - options.min) / (options.max - options.min || 1);
+        return h - pad - ratio * (h - pad * 2);
+      };
+      const tickCount = Math.min(5, pointCount);
+      ctx.fillStyle = "#6f7d84";
+      ctx.font = "11px Segoe UI";
+      for (let i = 0; i < tickCount; i++) {
+        const idx = Math.round((pointCount - 1) * (i / Math.max(tickCount - 1, 1)));
+        const x = pad + idx * xStep;
+        const label = options.labels[idx];
+        ctx.beginPath();
+        ctx.strokeStyle = "#e6dfd1";
+        ctx.moveTo(x, pad);
+        ctx.lineTo(x, h - pad);
+        ctx.stroke();
+        ctx.fillText(label, Math.max(0, x - 18), h - 8);
+      }
+      for (const line of series) {
+        ctx.strokeStyle = line.color;
+        ctx.lineWidth = line.width || 2;
+        ctx.beginPath();
+        line.values.forEach((value, idx) => {
+          const x = pad + idx * xStep;
+          const y = scaleY(value);
+          if (idx === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+      }
+    }
+
+    function renderCharts() {
+      const labels = bleHistory.map((p) => {
+        const d = new Date(p.t * 1000);
+        return d.toLocaleTimeString([], {
+          hour12: false,
+          minute: "2-digit",
+          second: "2-digit",
+        });
+      });
+      drawChart(accelCanvas, [
+        { color: "#0e8a6a", values: bleHistory.map((p) => p.ax) },
+        { color: "#1e6fa8", values: bleHistory.map((p) => p.ay) },
+        { color: "#c78600", values: bleHistory.map((p) => p.az) },
+      ], { min: -4, max: 4, labels });
+      drawChart(gyroCanvas, [
+        { color: "#0e8a6a", values: bleHistory.map((p) => p.gx) },
+        { color: "#1e6fa8", values: bleHistory.map((p) => p.gy) },
+        { color: "#c78600", values: bleHistory.map((p) => p.gz) },
+        { color: "#cc4b37", values: bleHistory.map((p) => p.fall_prob * 250), width: 2.5 },
+      ], { min: -250, max: 250, labels });
+    }
+
+    function decodeText(value) {
+      return new TextDecoder().decode(value);
+    }
+
+    function pushHistory() {
+      bleHistory.push({
+        t: Date.now() / 1000,
+        ax: bleLatest.ax,
+        ay: bleLatest.ay,
+        az: bleLatest.az,
+        gx: bleLatest.gx,
+        gy: bleLatest.gy,
+        gz: bleLatest.gz,
+        fall_prob: bleLatest.fall_prob,
+      });
+      if (bleHistory.length > 120) bleHistory.shift();
+      renderCharts();
+    }
+
+    function onDisconnected() {
+      bleLatest.connected = false;
+      bleLatest.connection_state = "disconnected";
+      updateSummary();
+    }
+
+    async function connectBle() {
+      if (!navigator.bluetooth) {
+        bleLatest.connection_state = "error";
+        bleLatest.last_error = "Web Bluetooth not supported in this browser";
+        updateSummary();
+        return;
+      }
+
+      bleLatest.connection_state = "connecting";
+      bleLatest.last_error = "";
+      updateSummary();
+
+      bleDevice = await navigator.bluetooth.requestDevice({
+        filters: [{ services: [SERVICE_UUID], namePrefix: "ESP32" }],
+        optionalServices: [SERVICE_UUID],
+      });
+      bleDevice.addEventListener("gattserverdisconnected", onDisconnected);
+      bleLatest.device_name = bleDevice.name || "{{ device_name }}";
+
+      bleServer = await bleDevice.gatt.connect();
+      const service = await bleServer.getPrimaryService(SERVICE_UUID);
+      const statusChar = await service.getCharacteristic(STATUS_CHAR_UUID);
+      const accelChar = await service.getCharacteristic(ACCEL_CHAR_UUID);
+      const gyroChar = await service.getCharacteristic(GYRO_CHAR_UUID);
+
+      await statusChar.startNotifications();
+      statusChar.addEventListener("characteristicvaluechanged", (event) => {
+        const parts = decodeText(event.target.value).split(",");
+        if (parts.length !== 4) return;
+        bleLatest.status_text = parts[0];
+        bleLatest.status = Number(parts[1]);
+        bleLatest.fall_prob = Number(parts[2]);
+        bleLatest.non_fall_prob = Number(parts[3]);
+        updateSummary();
+      });
+
+      await accelChar.startNotifications();
+      accelChar.addEventListener("characteristicvaluechanged", (event) => {
+        const parts = decodeText(event.target.value).split(",");
+        if (parts.length !== 3) return;
+        bleLatest.ax = Number(parts[0]);
+        bleLatest.ay = Number(parts[1]);
+        bleLatest.az = Number(parts[2]);
+        updateSummary();
+      });
+
+      await gyroChar.startNotifications();
+      gyroChar.addEventListener("characteristicvaluechanged", (event) => {
+        const parts = decodeText(event.target.value).split(",");
+        if (parts.length !== 3) return;
+        bleLatest.gx = Number(parts[0]);
+        bleLatest.gy = Number(parts[1]);
+        bleLatest.gz = Number(parts[2]);
+        pushHistory();
+        updateSummary();
+      });
+
+      bleLatest.connected = true;
+      bleLatest.connection_state = "connected";
+      updateSummary();
+    }
+
+    async function disconnectBle() {
+      if (bleDevice?.gatt?.connected) {
+        bleDevice.gatt.disconnect();
+      } else {
+        onDisconnected();
+      }
+    }
+
+    connectBtn.addEventListener("click", async () => {
+      try {
+        await connectBle();
+      } catch (error) {
+        bleLatest.connected = false;
+        bleLatest.connection_state = "error";
+        bleLatest.last_error = `${error.name || "Error"}: ${error.message || error}`;
+        updateSummary();
+      }
+    });
+
+    disconnectBtn.addEventListener("click", async () => {
+      await disconnectBle();
+    });
+
+    updateSummary();
+    renderCharts();
+  </script>
+</body>
+</html>

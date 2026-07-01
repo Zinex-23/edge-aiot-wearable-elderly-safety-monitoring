@@ -1,0 +1,22 @@
+{
+  "version": 67,
+  "accuracy": 0.8861940298507462,
+  "precision": 0.8327974276527331,
+  "recall": 0.9664179104477612,
+  "f1": 0.8946459412780656,
+  "false_alarm_rate": 0.19402985074626866,
+  "miss_rate": 0.033582089552238806,
+  "best_threshold": 0.7000000000000002,
+  "config": {
+    "filters": "[32, 48, 64, 96]",
+    "kernels": "[5, 5, 5, 5]",
+    "dense": "32",
+    "lr": "0.0003",
+    "dropout": "0.5",
+    "l2": "0.0001",
+    "batch": "32",
+    "epochs": "200",
+    "cw": "{0: 1.0, 1: 1.2}",
+    "note": "Max regularize: D32 + dropout=0.5 + batch=32 + FAR penalty\u00d72.5"
+  }
+}

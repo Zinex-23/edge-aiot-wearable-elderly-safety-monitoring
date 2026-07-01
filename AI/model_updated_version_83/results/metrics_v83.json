@@ -1,0 +1,27 @@
+{
+  "version": 83,
+  "accuracy": 0.9029850746268657,
+  "precision": 0.8624161073825504,
+  "recall": 0.9589552238805971,
+  "f1": 0.9081272084805654,
+  "false_alarm_rate": 0.15298507462686567,
+  "miss_rate": 0.041044776119402986,
+  "best_threshold": 0.36000000000000004,
+  "stopped_epoch": 66,
+  "config": {
+    "filters": "[32, 64, 64, 96]",
+    "kernels": "[3, 3, 3, 3]",
+    "dense": "32",
+    "lr": "0.0003",
+    "dropout": "0.5",
+    "l2": "0.0005",
+    "batch": "32",
+    "epochs": "300",
+    "cw": "{0: 1.0, 1: 1.2}",
+    "aug_sigma": "0.0",
+    "es_patience": "25",
+    "lr_factor": "0.2",
+    "lr_patience": "10",
+    "note": "Dropout=0.5 + L2=5e-4 \u2014 strong regularization"
+  }
+}
